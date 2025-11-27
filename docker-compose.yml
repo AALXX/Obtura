@@ -42,7 +42,11 @@ services:
       - /app/node_modules
     environment:
       - NODE_ENV=development
-      - NEXT_PUBLIC_API_BASE=/api      
+      - NEXT_PUBLIC_BACKEND_URL=/backend      
+      - GOOGLE_CLIENT_ID=
+      - GOOGLE_CLIENT_SECRET=
+      - NEXTAUTH_URL=http://localhost
+      - AUTH_SECRET=
     depends_on:
       - traefik
     networks:
@@ -56,12 +60,13 @@ services:
     labels:
       - "traefik.enable=true"
       
-      - "traefik.http.routers.core-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.core-api.rule=PathPrefix(`/backend`)"
       - "traefik.http.routers.core-api.entrypoints=web"
       - "traefik.http.routers.core-api.priority=20"
       
-      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
-      - "traefik.http.routers.core-api.middlewares=strip-api"
+      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/backend"
+      - "traefik.http.routers.core-api.middlewares=strip-backend"  
+
     ports:
       - "7070:7070" 
     volumes:

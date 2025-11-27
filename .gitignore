@@ -4,3 +4,4 @@
 
 /api-layer/core-api/node_modules
 /api-layer/core-api/.env
+docker-compose.dev.yml

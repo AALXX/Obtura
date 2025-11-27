@@ -2,7 +2,7 @@ import express, { NextFunction } from 'express';
 import http from 'http';
 import cors from 'cors';
 
-import TestManager from './routes/Test/TestManagerRoutes';
+import UserAccountManager from './routes/UserAccountManagerRoutes';
 import config from './config/config';
 import logging from './config/logging';
 
@@ -29,9 +29,8 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', env: process.env.NODE_ENV || 'development' });
 });
 
-app.use('/test-manager', TestManager);
+app.use('/account-manager', UserAccountManager);
 
-// 404 handler
 app.use((req, res, next: NextFunction) => {
     const error = new Error('Not Found');
     return res.status(404).json({ message: error.message });
