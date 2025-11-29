@@ -5,9 +5,27 @@ import Image from 'next/image'
 import { useState } from 'react'
 import DialogCanvas from '@/common-components/DialogCanvas'
 import AccountSettings from './components/AcccountSettings'
+import { signOut } from 'next-auth/react'
 
-const UserAccount: React.FC<UserResponse & { userImg: string | undefined | null }> = ({ error, email, name, accountType, memberSince, activeSessions, userSubscription, userImg }) => {
+const UserAccount: React.FC<UserResponse & { userAccessToken: string; userImg: string | undefined | null }> = ({ error, email, name, accountType, memberSince, activeSessions, userSubscription, userImg, userAccessToken }) => {
     const [showSettings, setShowSettings] = useState(false)
+
+    const handleSignOut = async () => {
+        try {
+            const resp = await axios.post<any>(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/logout`, {
+                userAccessToken
+            })
+
+            if (resp.data.error) {
+                console.error('Error during sign out:', resp.data.error)
+                return
+            }
+
+            await signOut({ callbackUrl: '/account/login-register' })
+        } catch (error) {
+            console.error('Error during sign out:', error)
+        }
+    }
 
     return (
         <main className="container mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
@@ -82,7 +100,7 @@ const UserAccount: React.FC<UserResponse & { userImg: string | undefined | null 
                 </div>
 
                 <div className="border-t border-neutral-800 pt-4">
-                    <button className="flex items-center gap-2 text-xs font-medium text-orange-500 transition-colors hover:text-orange-400 sm:text-sm">
+                    <button className="flex cursor-pointer items-center gap-2 text-xs font-medium text-orange-500 transition-colors hover:text-orange-400 sm:text-sm" onClick={handleSignOut}>
                         <LogOut className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                         Sign out
                     </button>

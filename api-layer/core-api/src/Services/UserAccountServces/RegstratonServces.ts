@@ -50,7 +50,6 @@ const RegisterUserWithGoogle = async (req: Request, res: Response) => {
             userId = newUser.rows[0].id;
         }
 
-
         await db.query(
             `
       INSERT INTO oauth_accounts (user_id, provider, provider_account_id, access_token, expires_at)
@@ -91,6 +90,34 @@ const RegisterUserWithGoogle = async (req: Request, res: Response) => {
     }
 };
 
+const LogoutUser = async (req: Request, res: Response) => {
+    const errors = CustomRequestValidationResult(req);
+    if (!errors.isEmpty()) {
+        errors.array().forEach((error) => {
+            logging.error('LOGOUT_USER_FUNCTION', error.errorMsg);
+        });
+        res.status(400).json({ error: true, errors: errors.array() });
+        return;
+    }
+    try {
+        const queryString = `
+            DELETE FROM sessions
+            WHERE access_token = $1
+        `;
+
+        await db.query(queryString, [req.body.accessToken]);
+
+        res.status(200).json({ error: false });
+    } catch (error: any) {
+        logging.error('LOGOUT_USER_FUNCTION', error.message);
+        res.status(500).json({
+            error: true,
+            errmsg: 'Something went wrong',
+        });
+    }
+};
+
 export default {
     RegisterUserWithGoogle,
+    LogoutUser,
 };

@@ -28,7 +28,10 @@
     },
     "dependencies": {
         "@types/cors": "^2.8.19",
+        "@types/jsonwebtoken": "^9.0.10",
+        "@types/multer": "^2.0.0",
         "@types/node-schedule": "^2.1.0",
+        "@types/nodemailer": "^7.0.4",
         "@types/pg": "^8.15.6",
         "axios": "^0.27.2",
         "bcrypt": "^5.0.1",
@@ -38,6 +41,9 @@
         "express-validator": "^6.13.0",
         "google-auth-library": "^10.5.0",
         "http": "*",
+        "jsonwebtoken": "^9.0.2",
+        "multer": "^2.0.2",
+        "nodemailer": "^7.0.11",
         "path": "^0.12.7",
         "pg": "^8.16.3"
     }
