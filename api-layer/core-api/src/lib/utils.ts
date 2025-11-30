@@ -11,7 +11,7 @@ export const formatDate = (date: Date) => {
 
 export const getUserIdFromSessionToken = async (sessionToken: string): Promise<string | null> => {
     try {
-        const session = await db.query('SELECT user_id FROM sessions WHERE session_token = $1', [sessionToken]);
+        const session = await db.query('SELECT user_id FROM sessions WHERE access_token = $1', [sessionToken]);
         if (session.rows.length === 0) {
             return null;
         }

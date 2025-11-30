@@ -140,13 +140,11 @@ const ChangeUserData = async (req: Request, res: Response) => {
             });
         }
 
-        const queryString = `UPDATE users, userDescription SET name = $1 WHERE id = $2`;
+        const queryString = `UPDATE users SET name = $1 WHERE id = $2`;
 
         await db.query(queryString, [req.body.name, userId]);
 
-        res.status(200).json({
-            error: false,
-        });
+        res.sendStatus(200);
     } catch (error: any) {
         logging.error('CHANGE_USER_DATA', error.message);
         res.status(500).json({
@@ -417,10 +415,7 @@ const DeleteUserAccount = async (req: Request, res: Response) => {
 
         await db.query('DELETE FROM users WHERE id = $1', [userId]);
 
-        res.status(200).json({
-            error: false,
-            errmsg: 'User account deleted successfully',
-        });
+        res.sendStatus(200);
     } catch (error: any) {
         logging.error('DELETE_USER_ACCOUNT', error.message);
         res.status(500).json({

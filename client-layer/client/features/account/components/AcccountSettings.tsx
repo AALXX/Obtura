@@ -11,17 +11,18 @@ interface AccountSettingsProps {
     name: string
     email: string
     image: string
-    userSessionToken: string
+    accessToken: string
+    activeSessions: number
 }
 
-const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, userSessionToken }) => {
+const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, accessToken, activeSessions }) => {
     const [activeTab, setActiveTab] = useState('profile')
     const [formData, setFormData] = useState({
-        userName: name || '',
-        userEmail: email || '',
-        userDescription: '',
-        userSessionToken: userSessionToken
+        name: name || '',
+        description: '',
+        accessToken: accessToken
     })
+
 
     const [notifications, setNotifications] = useState({
         emailNotifications: true,
@@ -49,21 +50,23 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
     const handleSaveProfile = async () => {
         setIsLoading(true)
         try {
-            console.log('Saving profile:', formData)
-            const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/change-user-data`, formData)
-            console.log(resp.data)
+            const resp = await axios.put(`${process.env.NEXT_PUBLIC_BACKEND_URL}/account-manager/change-user-data`, formData)
+
+            if (resp.status === 200) {
+                alert('Profile updated successfully!')
+            }
         } catch (error) {
             console.error('Error updating profile:', error)
             alert('Failed to update profile. Please try again.')
         } finally {
-            setIsLoading(false)
+            // setIsLoading(false)
         }
     }
 
     const handleGetEmailChangeLink = async () => {
         try {
             const resp = await axios.post<any>(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/get-change-email-link`, {
-                userSessionToken: userSessionToken
+                accessToken: accessToken
             })
 
             if (resp.data.error) {
@@ -77,7 +80,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
     const handleGetPasswordChangeLink = async () => {
         try {
             const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/get-change-password-link`, {
-                userSessionToken: userSessionToken
+                accessToken: accessToken
             })
             console.log(resp.data)
         } catch (error) {
@@ -120,12 +123,12 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
 
     const handleSignOut = async () => {
         try {
-            const resp = await axios.post<any>(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/logout`, {
-                userSessionToken
+            const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/account-manager/logout`, {
+                accessToken
             })
 
-            if (resp.data.error) {
-                console.error('Error during sign out:', resp.data.error)
+            if (resp.status !== 200) {
+                window.alert('Failed to sign out. Please try again.')
                 return
             }
 
@@ -139,7 +142,14 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
         if (confirm('Are you absolutely sure? This action cannot be undone. This will permanently delete your account and remove all your data from our servers.')) {
             try {
                 console.log('Deleting account')
-                // await deleteAccount()
+                const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/account-manager/delete-account`, {
+                    accessToken
+                })
+
+                if (resp.status !== 200) {
+                    window.alert('Failed to sign out. Please try again.')
+                    return
+                }
 
                 await signOut({ callbackUrl: '/account/login-register' })
             } catch (error) {
@@ -163,19 +173,19 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
                 <div className="mt-6">
                     <div className="mb-6 border-b border-neutral-800 px-6">
                         <div className="flex gap-6">
-                            <button onClick={() => setActiveTab('profile')} className={`cursor-pointer relative py-3 text-sm font-medium transition-colors ${activeTab === 'profile' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
+                            <button onClick={() => setActiveTab('profile')} className={`relative cursor-pointer py-3 text-sm font-medium transition-colors ${activeTab === 'profile' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
                                 Profile
                                 {activeTab === 'profile' && <div className="absolute right-0 bottom-0 left-0 h-0.5 bg-orange-500"></div>}
                             </button>
-                            <button onClick={() => setActiveTab('security')} className={`cursor-pointer relative py-3 text-sm font-medium transition-colors ${activeTab === 'security' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
+                            <button onClick={() => setActiveTab('security')} className={`relative cursor-pointer py-3 text-sm font-medium transition-colors ${activeTab === 'security' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
                                 Security
                                 {activeTab === 'security' && <div className="absolute right-0 bottom-0 left-0 h-0.5 bg-orange-500"></div>}
                             </button>
-                            <button onClick={() => setActiveTab('notifications')} className={`cursor-pointer relative py-3 text-sm font-medium transition-colors ${activeTab === 'notifications' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
+                            <button onClick={() => setActiveTab('notifications')} className={`relative cursor-pointer py-3 text-sm font-medium transition-colors ${activeTab === 'notifications' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
                                 Notifications
                                 {activeTab === 'notifications' && <div className="absolute right-0 bottom-0 left-0 h-0.5 bg-orange-500"></div>}
                             </button>
-                            <button onClick={() => setActiveTab('sessions')} className={`cursor-pointer relative py-3 text-sm font-medium transition-colors ${activeTab === 'sessions' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
+                            <button onClick={() => setActiveTab('sessions')} className={`relative cursor-pointer py-3 text-sm font-medium transition-colors ${activeTab === 'sessions' ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
                                 Sessions
                                 {activeTab === 'sessions' && <div className="absolute right-0 bottom-0 left-0 h-0.5 bg-orange-500"></div>}
                             </button>
@@ -205,14 +215,14 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
                                     <label htmlFor="name" className="block text-white">
                                         Full Name
                                     </label>
-                                    <input id="name" value={formData.userName} onChange={e => handleInputChange('userName', e.target.value)} className="w-full rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 focus:ring-2 focus:ring-gray-500 focus:outline-none" placeholder="Enter your full name" />
+                                    <input id="name" value={formData.name} onChange={e => handleInputChange('name', e.target.value)} className="w-full rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 focus:ring-2 focus:ring-gray-500 focus:outline-none" placeholder="Enter your full name" />
                                 </div>
 
                                 <div className="space-y-2">
                                     <label htmlFor="email" className="block text-white">
                                         Email Address
                                     </label>
-                                    <h1 className="w-full rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 focus:ring-2 focus:ring-gray-500 focus:outline-none">{formData.userEmail}</h1>
+                                    <h1 className="w-full rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 focus:ring-2 focus:ring-gray-500 focus:outline-none">{email}</h1>
                                 </div>
                             </div>
 
@@ -220,16 +230,10 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
                                 <label htmlFor="bio" className="block text-white">
                                     Bio
                                 </label>
-                                <textarea
-                                    id="bio"
-                                    value={formData.userDescription}
-                                    onChange={e => handleInputChange('userDescription', e.target.value)}
-                                    className="min-h-[100px] w-full rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 focus:ring-2 focus:ring-gray-500 focus:outline-none"
-                                    placeholder="Tell us about yourself..."
-                                />
+                                <textarea id="bio" value={formData.description} onChange={e => handleInputChange('description', e.target.value)} className="min-h-[100px] w-full rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 focus:ring-2 focus:ring-gray-500 focus:outline-none" placeholder="Tell us about yourself..." />
                             </div>
 
-                            <button onClick={handleSaveProfile} disabled={isLoading} className={`cursor-pointer mt-auto rounded-md border p-2 text-white transition-colors hover:bg-[#ffffff1a]  ${isLoading ? 'cursor-not-allowed opacity-70' : ''}`}>
+                            <button onClick={handleSaveProfile} disabled={isLoading} className={`mt-auto cursor-pointer rounded-md border p-2 text-white transition-colors hover:bg-[#ffffff1a] ${isLoading ? 'cursor-not-allowed opacity-70' : ''}`}>
                                 {isLoading ? 'Saving...' : 'Save Changes'}
                             </button>
                         </div>
@@ -246,14 +250,14 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
                                 <div className="space-y-4">
                                     <div className="space-y-2">
                                         <div className="relative">
-                                            <button type="button" className="w-full cursor-pointer rounded-md bg-[#353535] px-3 py-2 text-white placeholder:text-gray-400 hover:bg-[#272727]" onClick={handleGetPasswordChangeLink}>
+                                            <button type="button" className="h-12 w-full cursor-pointer rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 hover:bg-[#232323]" onClick={handleGetPasswordChangeLink}>
                                                 Change Password
                                             </button>
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className="my-4 h-px w-full bg-white" />
+                                <div className="my-4 h-px w-full bg-neutral-800" />
 
                                 <div className="mb-4 flex items-center gap-2">
                                     <Lock className="h-5 w-5 text-white" />
@@ -262,14 +266,14 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
                                 <div className="space-y-4">
                                     <div className="space-y-2">
                                         <div className="relative">
-                                            <button type="button" className="w-full cursor-pointer rounded-md bg-[#353535] px-3 py-2 text-white placeholder:text-gray-400 hover:bg-[#272727]" onClick={handleGetEmailChangeLink}>
+                                            <button type="button" className="h-12 w-full cursor-pointer rounded-md bg-[#0a0a0a] px-3 py-2 text-white placeholder:text-gray-400 hover:bg-[#232323]" onClick={handleGetEmailChangeLink}>
                                                 Change Email
                                             </button>
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className="my-4 h-px w-full bg-white" />
+                                <div className="my-4 h-px w-full bg-neutral-800" />
 
                                 <div className="space-y-4">
                                     <div className="flex items-center gap-2">
@@ -288,7 +292,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <span className="text-white">Active Sessions</span>
-                                            <span className="text-gray-400">2 devices</span>
+                                            <span className="text-gray-400">{activeSessions} devices</span>
                                         </div>
                                     </div>
                                 </div>
@@ -353,13 +357,13 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, u
                         <div className="space-y-6">
                             <div className="space-y-4">
                                 <h3 className="text-lg font-semibold text-white">Session Management</h3>
-                                <div className="rounded-lg bg-[#353535] p-4">
+                                <div className="rounded-lg bg-[#0a0a0a] p-4">
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <p className="font-medium text-white">Sign Out</p>
                                             <p className="text-sm text-gray-400">Sign out from your current session</p>
                                         </div>
-                                        <button onClick={handleSignOut} className="rounded-md bg-[#353535] px-4 py-2 text-white transition-colors hover:bg-[#3f3f3f]">
+                                        <button onClick={handleSignOut} className="cursor-pointer rounded-md bg-[#1b1b1b] px-4 py-2 text-white transition-colors hover:bg-[#1f1f1f]">
                                             Sign Out
                                         </button>
                                     </div>

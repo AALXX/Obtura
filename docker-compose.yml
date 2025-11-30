@@ -42,7 +42,8 @@ services:
       - /app/node_modules
     environment:
       - NODE_ENV=development
-      - NEXT_PUBLIC_BACKEND_URL=/backend      
+      - BACKEND_URL=http://traefik/backend
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost/backend      
       - GOOGLE_CLIENT_ID=
       - GOOGLE_CLIENT_SECRET=
       - NEXTAUTH_URL=http://localhost
@@ -64,7 +65,7 @@ services:
       - "traefik.http.routers.core-api.entrypoints=web"
       - "traefik.http.routers.core-api.priority=20"
       
-      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/backend"
+      - "traefik.http.middlewares.strip-backend.stripprefix.prefixes=/backend"
       - "traefik.http.routers.core-api.middlewares=strip-backend"  
 
     ports:
@@ -79,6 +80,13 @@ services:
       - POSTGRESQL_USER=alx
       - POSTGRESQL_PASSWORD=serbvn
       - REDIS_URL=redis://redis:6379
+      - ACCOUNT_SECRET=
+      - GOOGLE_CLIENT_ID=
+      - FRONTEND_URL=http://traefik
+      - EMAIL_USERNAME=
+      - EMAIL_PASS=
+      - CHANGE_GMAIL_SECRET=
+      
     depends_on:
       - postgres
       - redis

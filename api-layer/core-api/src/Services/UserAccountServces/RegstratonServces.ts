@@ -74,7 +74,7 @@ const RegisterUserWithGoogle = async (req: Request, res: Response) => {
             [userId, accessToken, expiresAt, req.ip, req.headers['user-agent']],
         );
 
-        res.json({
+        res.status(200).json({
             token: accessToken,
             expiresAt: expiresAt.toISOString(),
             user: {
@@ -105,9 +105,10 @@ const LogoutUser = async (req: Request, res: Response) => {
             WHERE access_token = $1
         `;
 
+
         await db.query(queryString, [req.body.accessToken]);
 
-        res.status(200).json({ error: false });
+        res.sendStatus(200);
     } catch (error: any) {
         logging.error('LOGOUT_USER_FUNCTION', error.message);
         res.status(500).json({

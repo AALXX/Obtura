@@ -16,7 +16,7 @@ router.post('/logout', body('accessToken').not().isEmpty(), AccountRegistrationS
 
 router.get('/get-account-data/:accessToken', param('accessToken').not().isEmpty(), UserAccountServices.GetUserAccountData);
 
-router.put('/change-user-data', body('userName').not().isEmpty(), body('userDescription'), body('accessToken').not().isEmpty(), UserAccountServices.ChangeUserData);
+router.put('/change-user-data', body('name').not().isEmpty(), body('accessToken').not().isEmpty().isString(), UserAccountServices.ChangeUserData);
 
 router.post('/get-change-email-link', body('accessToken').not().isEmpty(), UserAccountServices.GetChangeEmailLink);
 

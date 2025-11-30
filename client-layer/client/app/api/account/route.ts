@@ -9,13 +9,10 @@ export async function GET() {
             return NextResponse.json({ name: '', authenticated: false }, { status: 200 })
         }
 
-        console.log(session.backendToken)
-
         const resp = await axios.get<{ email: string; name: string; accountType: string; error?: string }>(`${process.env.BACKEND_URL}/account-manager/get-account-data/${session.backendToken}`)
 
         if (resp.data.error) {
 
-            // erase token
             session.backendToken = ''
 
             return NextResponse.json({ name: '', authenticated: false }, { status: 200 })
@@ -26,7 +23,6 @@ export async function GET() {
 
         // }
 
-        
 
         switch (resp.data.accountType) {
             case 'platform':

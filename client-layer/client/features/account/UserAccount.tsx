@@ -6,18 +6,19 @@ import { useState } from 'react'
 import DialogCanvas from '@/common-components/DialogCanvas'
 import AccountSettings from './components/AcccountSettings'
 import { signOut } from 'next-auth/react'
+import axios from 'axios'
 
 const UserAccount: React.FC<UserResponse & { userAccessToken: string; userImg: string | undefined | null }> = ({ error, email, name, accountType, memberSince, activeSessions, userSubscription, userImg, userAccessToken }) => {
     const [showSettings, setShowSettings] = useState(false)
 
     const handleSignOut = async () => {
         try {
-            const resp = await axios.post<any>(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/logout`, {
-                userAccessToken
+            const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/account-manager/logout`, {
+                accessToken: userAccessToken
             })
 
-            if (resp.data.error) {
-                console.error('Error during sign out:', resp.data.error)
+            if (resp.status !== 200) {
+                window.alert('Failed to sign out. Please try again.')
                 return
             }
 
@@ -39,7 +40,7 @@ const UserAccount: React.FC<UserResponse & { userAccessToken: string; userImg: s
 
                 {showSettings && (
                     <DialogCanvas closeDialog={() => setShowSettings(false)}>
-                        <AccountSettings email={email} name={name} image={userImg || ''} userSessionToken={''} />
+                        <AccountSettings email={email} name={name} image={userImg || ''} accessToken={userAccessToken} activeSessions={activeSessions.length}/>
                     </DialogCanvas>
                 )}
 
