@@ -19,7 +19,18 @@ const Account = async () => {
 
         return (
             <div>
-                <UserAccount userAccessToken={session.backendToken!} accountType={resp.data.accountType} email={resp.data.email} name={resp.data.name} memberSince={resp.data.memberSince} activeSessions={resp.data.activeSessions} userSubscription={resp.data.userSubscription} userImg={session.user.image} />
+                <UserAccount
+                    userAccessToken={session.backendToken!}
+                    accountType={resp.data.accountType}
+                    email={resp.data.email}
+                    name={resp.data.name}
+                    memberSince={resp.data.memberSince}
+                    activeSessions={resp.data.activeSessions}
+                    userSubscription={resp.data.userSubscription}
+                    companyName={resp.data.companyName}
+                    companyRole={resp.data.companyRole}
+                    userImg={session.user.image}
+                />
             </div>
         )
     } catch (error) {

@@ -1,4 +1,8 @@
+'use client'
+import CompanyRequired from '@/common-components/CompayRequired'
+import { useAccountStore } from '@/lib/store/accountStore'
 import { Plus, Search, FolderKanban } from 'lucide-react'
+import { useEffect } from 'react'
 
 const projects = [
     { id: 1, name: 'E-commerce Platform', status: 'Active', deployments: 12, lastUpdated: '2 hours ago' },
@@ -7,9 +11,21 @@ const projects = [
 ]
 
 const UserProjects = () => {
+    const { user, status, fetchAccount } = useAccountStore()
+
+    useEffect(() => {
+        if (status === 'idle') {
+            fetchAccount()
+        }
+    }, [status, fetchAccount])
+
+    if (!user?.hasCompany) {
+        return <CompanyRequired featureAccess="projects" />
+    }
+
     return (
-        <div className="min-h-screen  text-white">
-            <div className="container mx-auto  px-4 py-8 sm:px-6 lg:px-8">
+        <div className="min-h-screen text-white">
+            <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
                 <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
                     <div>
                         <h1 className="mb-1 text-4xl font-bold">Projects</h1>

@@ -1,39 +1,38 @@
-export interface UserResponse {
-    error?: boolean
-    email: string
-    name: string
-    accountType: string 
-    memberSince: string 
-    activeSessions: ActiveSession[]
-    userSubscription: UserSubscription | null
+export interface UserSubscription {
+    plan: {
+        id: string
+        name: string
+        price_monthly: number
+        max_users: number | null
+        max_projects: number | null
+        max_deployments_per_month: number
+        max_apps: number
+        storage_gb: number
+    }
+    status: 'active' | 'past_due' | 'canceled' | 'trialing' | 'paused'
+    current_period_end: string
+    current_users_count: number
+    current_projects_count: number
+    current_deployments_count: number
+    current_storage_used_gb: number
 }
 
-export interface ActiveSession {
+export interface SessionInfo {
     id: string
-    expires_at: string
-    last_used_at: string
     ip_address: string
     user_agent: string
     created_at: string
+    last_used_at: string
 }
 
-export interface UserSubscription {
-    id: string
-    status: 'active' | 'past_due' | 'canceled' | 'trialing' | 'paused'
-    current_period_start: string
-    current_period_end: string
-    cancel_at_period_end: boolean
-    plan: SubscriptionPlan
-}
-
-export interface SubscriptionPlan {
-    id: string // "business", "pro", etc.
+export interface UserResponse {
+    error?: string
+    email: string
     name: string
-    description: string | null
-    price_monthly: number
-    max_users: number
-    max_projects: number | null
-    max_deployments_per_month: number
-    max_apps: number
-    storage_gb: number
+    accountType: 'email' | 'google'
+    memberSince: string
+    activeSessions: SessionInfo[]
+    userSubscription: UserSubscription | null
+    companyName?: string
+    companyRole?: 'owner' | 'admin' | 'member'
 }

@@ -5,6 +5,7 @@ interface User {
     name: string
     accountType: string
     image: string
+    hasCompany: boolean
 }
 
 interface AccountState {
@@ -48,7 +49,8 @@ export const useAccountStore = create<AccountState>(set => ({
                 user: {
                     name: data.name,
                     accountType: data.accountType,
-                    image: data.image
+                    image: data.image,
+                    hasCompany: data.hasCompany
                 },
                 authenticated: data.authenticated,
                 error: null

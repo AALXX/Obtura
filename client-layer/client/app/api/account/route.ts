@@ -9,7 +9,7 @@ export async function GET() {
             return NextResponse.json({ name: '', authenticated: false }, { status: 200 })
         }
 
-        const resp = await axios.get<{ email: string; name: string; accountType: string; error?: string }>(`${process.env.BACKEND_URL}/account-manager/get-account-data/${session.backendToken}`)
+        const resp = await axios.get<{ email: string; name: string; accountType: string; hasCompany: boolean; error?: string }>(`${process.env.BACKEND_URL}/account-manager/get-account-data/${session.backendToken}`)
 
         if (resp.data.error) {
 
@@ -40,6 +40,7 @@ export async function GET() {
             name: resp.data.name,
             accountType: resp.data.accountType,
             authenticated: true,
+            hasCompany: resp.data.hasCompany,
             image: image
         })
     } catch (error) {

@@ -1,25 +1,25 @@
 CREATE TABLE teams (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     
     name VARCHAR(255) NOT NULL,
-    slug VARCHAR(100) UNIQUE NOT NULL,
+    slug VARCHAR(100) NOT NULL,
     
-    -- Ownership
     owner_user_id UUID NOT NULL REFERENCES users(id),
     
-    -- GDPR Essential
     data_region data_region DEFAULT 'eu-central',
     
-    -- Status
     is_active BOOLEAN DEFAULT true,
     
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    
+    UNIQUE(company_id, slug)
 );
 
--- ============================================================================
--- TEAM MEMBERS
--- ============================================================================
+CREATE INDEX idx_teams_company_id ON teams(company_id);
+CREATE INDEX idx_teams_owner ON teams(owner_user_id);    
+CREATE INDEX idx_teams_slug ON teams(slug);
 
 CREATE TABLE team_members (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

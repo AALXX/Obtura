@@ -22,9 +22,6 @@ CREATE TABLE projects (
     UNIQUE(team_id, slug)
 );
 
--- ============================================================================
--- DEPLOYMENTS (Simplified)
--- ============================================================================
 
 CREATE TABLE deployments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -51,32 +48,24 @@ CREATE TABLE deployments (
 
 CREATE INDEX idx_deployments_project_id ON deployments(project_id);
 
--- ============================================================================
--- AUDIT LOG (Simplified - ONE table for everything)
--- ============================================================================
 
 CREATE TABLE audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- Who did what
     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     team_id UUID REFERENCES teams(id) ON DELETE SET NULL,
     
-    -- What happened
-    action VARCHAR(100) NOT NULL, -- 'user.login', 'project.created', 'data.exported'
-    resource_type VARCHAR(50), -- 'user', 'project', 'team'
+    action VARCHAR(100) NOT NULL, 
+    resource_type VARCHAR(50),
     resource_id UUID,
     
-    -- Context
     ip_address INET,
     user_agent TEXT,
     
-    -- Result
     success BOOLEAN DEFAULT true,
     error_message TEXT,
     
-    -- GDPR special tracking
-    is_gdpr_action BOOLEAN DEFAULT false, -- Flag for exports/deletions
+    is_gdpr_action BOOLEAN DEFAULT false,
     
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -84,6 +73,3 @@ CREATE TABLE audit_logs (
 CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
 CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at DESC);
 CREATE INDEX idx_audit_logs_gdpr ON audit_logs(is_gdpr_action) WHERE is_gdpr_action = true;
-
--- Auto-delete audit logs older than 1 year (except GDPR actions)
--- Handle this in application code or pg_cron------

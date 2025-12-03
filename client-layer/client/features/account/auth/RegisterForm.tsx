@@ -1,3 +1,4 @@
+
 'use client'
 
 import { useState } from 'react'
@@ -10,17 +11,32 @@ const RegisterForm = () => {
         email: '',
         password: '',
         companyName: '',
-        fullName: ''
+        fullName: '',
+        // GDPR fields
+        acceptTerms: false,
+        acceptPrivacy: false,
+        marketingConsent: false,
+        dataRegion: 'eu-central' as 'eu-central' | 'eu-west' | 'eu-north'
     })
     const [isLoading, setIsLoading] = useState(false)
+    const [error, setError] = useState('')
 
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault()
+        setError('')
+
+        // Validate GDPR consent
+        if (!formData.acceptTerms || !formData.acceptPrivacy) {
+            setError('You must accept the Terms of Service and Privacy Policy to continue')
+            return
+        }
+
         setIsLoading(true)
         try {
             await handleEmailRegister(formData)
         } catch (error) {
             console.error('Register error:', error)
+            setError('Registration failed. Please try again.')
         } finally {
             setIsLoading(false)
         }
@@ -29,9 +45,10 @@ const RegisterForm = () => {
     return (
         <div className="space-y-5">
             <form onSubmit={handleSubmit} className="space-y-5">
+                {/* Company Information */}
                 <div>
                     <label htmlFor="companyName" className="mb-2 block text-sm font-medium text-white">
-                        Company Name
+                        Company Name *
                     </label>
                     <input
                         type="text"
@@ -45,9 +62,10 @@ const RegisterForm = () => {
                     />
                 </div>
 
+                {/* Personal Information */}
                 <div>
                     <label htmlFor="fullName" className="mb-2 block text-sm font-medium text-white">
-                        Full Name
+                        Full Name *
                     </label>
                     <input
                         type="text"
@@ -63,14 +81,14 @@ const RegisterForm = () => {
 
                 <div>
                     <label htmlFor="email" className="mb-2 block text-sm font-medium text-white">
-                        Email
+                        Work Email *
                     </label>
                     <input
                         type="email"
                         id="email"
                         value={formData.email}
                         onChange={e => setFormData({ ...formData, email: e.target.value })}
-                        placeholder="you@example.com"
+                        placeholder="you@company.com"
                         required
                         disabled={isLoading}
                         className="w-full rounded border border-neutral-800 bg-black px-4 py-3 text-white transition-colors focus:border-neutral-600 focus:outline-none disabled:opacity-50"
@@ -79,7 +97,7 @@ const RegisterForm = () => {
 
                 <div>
                     <label htmlFor="password" className="mb-2 block text-sm font-medium text-white">
-                        Password
+                        Password *
                     </label>
                     <input
                         type="password"
@@ -92,10 +110,58 @@ const RegisterForm = () => {
                         minLength={8}
                         className="w-full rounded border border-neutral-800 bg-black px-4 py-3 text-white transition-colors focus:border-neutral-600 focus:outline-none disabled:opacity-50"
                     />
+                    <p className="mt-1 text-xs text-gray-400">Minimum 8 characters</p>
                 </div>
 
+                {/* Data Region Selection */}
+                <div>
+                    <label htmlFor="dataRegion" className="mb-2 block text-sm font-medium text-white">
+                        Data Region *
+                    </label>
+                    <select id="dataRegion" value={formData.dataRegion} onChange={e => setFormData({ ...formData, dataRegion: e.target.value as any })} disabled={isLoading} className="w-full rounded border border-neutral-800 bg-black px-4 py-3 text-white transition-colors focus:border-neutral-600 focus:outline-none disabled:opacity-50">
+                        <option value="eu-central">EU Central (Germany)</option>
+                        <option value="eu-west">EU West (Ireland)</option>
+                        <option value="eu-north">EU North (Sweden)</option>
+                    </select>
+                    <p className="mt-1 text-xs text-gray-400">Choose where your data will be stored</p>
+                </div>
+
+                {/* GDPR Consent Checkboxes */}
+                <div className="space-y-3 rounded border border-neutral-800 bg-black p-4">
+                    <div className="flex items-start gap-3">
+                        <input type="checkbox" id="acceptTerms" checked={formData.acceptTerms} onChange={e => setFormData({ ...formData, acceptTerms: e.target.checked })} disabled={isLoading} className="mt-1 h-4 w-4 cursor-pointer rounded border-neutral-700 bg-neutral-800 text-orange-500 focus:ring-2 focus:ring-orange-500" />
+                        <label htmlFor="acceptTerms" className="flex-1 text-xs text-gray-300">
+                            I accept the{' '}
+                            <Link href="/legal/terms" className="text-orange-500 hover:text-orange-400">
+                                Terms of Service
+                            </Link>{' '}
+                            *
+                        </label>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                        <input type="checkbox" id="acceptPrivacy" checked={formData.acceptPrivacy} onChange={e => setFormData({ ...formData, acceptPrivacy: e.target.checked })} disabled={isLoading} className="mt-1 h-4 w-4 cursor-pointer rounded border-neutral-700 bg-neutral-800 text-orange-500 focus:ring-2 focus:ring-orange-500" />
+                        <label htmlFor="acceptPrivacy" className="flex-1 text-xs text-gray-300">
+                            I accept the{' '}
+                            <Link href="/legal/privacy" className="text-orange-500 hover:text-orange-400">
+                                Privacy Policy
+                            </Link>{' '}
+                            *
+                        </label>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                        <input type="checkbox" id="marketingConsent" checked={formData.marketingConsent} onChange={e => setFormData({ ...formData, marketingConsent: e.target.checked })} disabled={isLoading} className="mt-1 h-4 w-4 cursor-pointer rounded border-neutral-700 bg-neutral-800 text-orange-500 focus:ring-2 focus:ring-orange-500" />
+                        <label htmlFor="marketingConsent" className="flex-1 text-xs text-gray-300">
+                            I want to receive product updates and marketing communications (optional)
+                        </label>
+                    </div>
+                </div>
+
+                {error && <div className="rounded border border-red-800 bg-red-900/20 p-3 text-xs text-red-400">{error}</div>}
+
                 <button type="submit" disabled={isLoading} className="w-full cursor-pointer rounded bg-white py-3 font-medium text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50">
-                    {isLoading ? 'Creating account...' : 'Create account'}
+                    {isLoading ? 'Creating account...' : 'Create company account'}
                 </button>
             </form>
 

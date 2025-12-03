@@ -3,19 +3,16 @@ import AuthRequired from '@/common-components/AuthRequredForm'
 import axios from 'axios'
 import { UserResponse } from '@/features/account/types/AccoutTypes'
 import UserProjects from '@/features/projects/UserProjects'
+import CompanyRequired from '@/common-components/CompayRequired'
+import { useAccountStore } from '@/lib/store/accountStore'
 
 const Projects = async () => {
     const session = await auth()
 
     try {
         if (!session || !session.user) {
-            return <AuthRequired featureAccess="account" />
+            return <AuthRequired featureAccess="projects" />
         }
-
-        // const resp = await axios.get<UserResponse>(`${process.env.BACKEND_URL}/account-manager/get-account-projects/${session.backendToken}`)
-        // if (resp.status !== 200) {
-        //     return <AuthRequired featureAccess="account" />
-        // }
 
         return (
             <div>

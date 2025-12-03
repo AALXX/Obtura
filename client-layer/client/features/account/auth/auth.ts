@@ -35,12 +35,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                     })
 
                     if (response.status !== 200) {
-                        const error = await response.data
-                        console.error('Backend authentication failed:', error)
+                        console.error('Backend authentication failed:', response.data)
                         return false
                     }
 
-                    const data = await response.data
+                    const data = response.data
 
                     user.backendToken = data.token
                     user.backendUserId = data.user.id
@@ -55,7 +54,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             return true
         },
 
-        async jwt({ token, user, account, trigger }) {
+        async jwt({ token, user }) {
             if (user) {
                 token.backendToken = user.backendToken
                 token.backendUserId = user.backendUserId
@@ -76,7 +75,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             if (token.backendToken) {
                 session.backendToken = token.backendToken as string
                 session.userId = token.backendUserId as string
-                session.user.id = token.backendUserId as string
             }
 
             return session

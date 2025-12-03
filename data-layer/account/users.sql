@@ -8,27 +8,22 @@ CREATE TYPE data_region AS ENUM ('eu-central', 'eu-west', 'eu-north');
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- Identity
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255),
     avatar_url TEXT,
     
-    -- Auth
     password_hash TEXT,
     email_verified BOOLEAN DEFAULT false,
     
-    -- Status
     status user_status DEFAULT 'active',
     
-    -- GDPR Essentials (just 3 fields!)
     data_region data_region DEFAULT 'eu-central',
     marketing_consent BOOLEAN DEFAULT false,
-    deletion_requested_at TIMESTAMP, -- Right to erasure
+    deletion_requested_at TIMESTAMP, 
     
-    -- Timestamps
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    deleted_at TIMESTAMP -- Soft delete
+    deleted_at TIMESTAMP 
 );
 
 CREATE INDEX idx_users_email ON users(email);
@@ -42,7 +37,6 @@ CREATE TABLE oauth_accounts (
     provider VARCHAR(50) NOT NULL, -- 'google', 'github'
     provider_account_id VARCHAR(255) NOT NULL,
     
-    -- Tokens (encrypt these in application code before storage)
     access_token TEXT,
     refresh_token TEXT,
     expires_at TIMESTAMP,
