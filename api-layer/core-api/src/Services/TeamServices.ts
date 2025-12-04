@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import logging from '../config/logging';
 import { CustomRequestValidationResult } from '../common/comon';
 import db from '../config/postgresql';
-import { getDataRegion } from '../lib/utils';
+import { formatDate, getDataRegion } from '../lib/utils';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import { getTeamInvitationEmailTemplate } from '../config/HTML_email_Templates';
@@ -20,21 +20,47 @@ const CreateTeam = async (req: Request, res: Response) => {
             logging.error('CREATE-TEAM', error.errorMsg);
         });
 
-        return res.status(200).json({ error: true, errors: errors.array() });
+        return res.status(401).json({ error: true, errors: errors.array() });
     }
 
     try {
-        const { accessToken, teamName, teamDescription, companyId } = req.body;
+        const { accessToken, teamName, teamDescription } = req.body;
 
         const region = getDataRegion(req);
 
-        const insertNewTeam = await db.query('INSERT INTO teams (name, team_description, company_id, owner_user_id, data_region) VALUES ($1, $2, $3, (SELECT id FROM sessions WHERE access_token = $4)) RETURNING id', [
-            teamName,
-            teamDescription,
-            companyId,
-            accessToken,
-            region,
-        ]);
+        const baseSlug = teamName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '');
+        const randomSuffix = Math.random().toString(36).substr(2, 6);
+        const teamSlug = `${baseSlug}-${randomSuffix}`;
+
+        const insertNewTeam = await db.query(
+            `INSERT INTO teams (name, team_description, company_id, owner_user_id, data_region, slug) 
+   VALUES (
+     $1, 
+     $2, 
+     (SELECT c.id 
+      FROM companies c 
+      JOIN sessions s ON c.owner_user_id = s.user_id 
+      WHERE s.access_token = $3), 
+     (SELECT user_id FROM sessions WHERE access_token = $3), 
+     $4,
+     $5
+   ) 
+   RETURNING id`,
+            [teamName, teamDescription, accessToken, region, teamSlug],
+        );
+
+        await db.query(
+            `INSERT INTO team_members (team_id, user_id, role) 
+   VALUES (
+     $1, 
+     (SELECT user_id FROM sessions WHERE access_token = $2), 
+     'owner'
+   )`,
+            [insertNewTeam.rows[0].id, accessToken],
+        );
 
         if (!insertNewTeam) {
             return res.status(401).json({
@@ -43,7 +69,7 @@ const CreateTeam = async (req: Request, res: Response) => {
             });
         }
 
-        res.status(200).json({});
+        res.status(200).json({ id: insertNewTeam.rows[0].id });
     } catch (error) {
         console.error('create team error:', error);
         res.status(401).json({ error: 'Authentication failed' });
@@ -57,15 +83,39 @@ const GetTeams = async (req: Request, res: Response) => {
             logging.error('GET-TEAMS', error.errorMsg);
         });
 
-        return res.status(200).json({ error: true, errors: errors.array() });
+        return res.status(401).json({ error: true, errors: errors.array() });
     }
 
     try {
-        const teams = await db.query('SELECT * FROM teams WHERE owner_user_id = (SELECT user_id FROM sessions WHERE access_token = $1)', [req.params.accessToken]);
-        res.status(200).json({ teams: teams.rows });
+        const teams = await db.query(
+            `SELECT 
+    t.*, 
+    COUNT(tm.user_id) as member_count
+  FROM teams t
+  LEFT JOIN team_members tm ON t.id = tm.team_id
+  WHERE t.owner_user_id = (
+    SELECT user_id 
+    FROM sessions 
+    WHERE access_token = $1
+  )
+  GROUP BY t.id`,
+            [req.params.accessToken],
+        );
+
+        const formatedTeams = teams.rows.map((team) => {
+            return {
+                id: team.id,
+                name: team.name,
+                updated_at: formatDate(team.updated_at),
+                memberCount: team.member_count,
+                is_active: team.is_active,
+            };
+        });
+
+        res.status(200).json({ teams: formatedTeams });
     } catch (error) {
         console.error('Google auth error:', error);
-        res.status(401).json({ error: 'Authentication failed' });
+        res.status(500).json({ error: 'Authentication failed' });
     }
 };
 
@@ -87,7 +137,7 @@ const UpdateTeam = async (req: Request, res: Response) => {
         res.status(200).json({});
     } catch (error) {
         console.error('Google auth error:', error);
-        res.status(401).json({ error: 'Authentication failed' });
+        res.status(500).json({ error: 'Authentication failed' });
     }
 };
 
@@ -98,14 +148,14 @@ const DeleteTeam = async (req: Request, res: Response) => {
             logging.error('REGISTER-USER-WITH-GOOGLE', error.errorMsg);
         });
 
-        return res.status(200).json({ error: true, errors: errors.array() });
+        return res.status(401).json({ error: true, errors: errors.array() });
     }
 
     try {
         res.status(200).json({});
     } catch (error) {
         console.error('Google auth error:', error);
-        res.status(401).json({ error: 'Authentication failed' });
+        res.status(500).json({ error: 'Authentication failed' });
     }
 };
 
@@ -116,7 +166,7 @@ const InviteUser = async (req: Request, res: Response) => {
             logging.error('INVITE-USER', error.errorMsg);
         });
 
-        return res.status(200).json({ error: true, errors: errors.array() });
+        return res.status(401).json({ error: true, errors: errors.array() });
     }
 
     try {
@@ -133,7 +183,6 @@ const InviteUser = async (req: Request, res: Response) => {
             LIMIT 1`,
             [req.body.accessToken, req.body.teamId],
         );
-
 
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Team not found or invalid access' });

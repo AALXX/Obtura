@@ -59,7 +59,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, a
             console.error('Error updating profile:', error)
             alert('Failed to update profile. Please try again.')
         } finally {
-            // setIsLoading(false)
+            setIsLoading(false)
         }
     }
 

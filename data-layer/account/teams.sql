@@ -4,6 +4,7 @@ CREATE TABLE teams (
     
     name VARCHAR(255) NOT NULL,
     slug VARCHAR(100) NOT NULL,
+    team_description VARCHAR(100),
     
     owner_user_id UUID NOT NULL REFERENCES users(id),
     
