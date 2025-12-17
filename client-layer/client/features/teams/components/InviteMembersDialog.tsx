@@ -1,17 +1,71 @@
 import React, { useState } from 'react'
-import { Mail, X, UserPlus, Loader2, Shield, User } from 'lucide-react'
+import { Mail, X, UserPlus, Loader2, Shield, User, Crown, Code, FlaskConical, Palette, BarChart, Eye } from 'lucide-react'
 import axios from 'axios'
+
+enum TeamRole {
+    CEO = 'ceo',
+    CTO = 'cto',
+    CFO = 'cfo',
+    ENGINEERING_MANAGER = 'engineering_manager',
+    TECH_LEAD = 'tech_lead',
+    DEVOPS_LEAD = 'devops_lead',
+    SENIOR_DEVELOPER = 'senior_developer',
+    DEVELOPER = 'developer',
+    JUNIOR_DEVELOPER = 'junior_developer',
+    QA_LEAD = 'qa_lead',
+    QA_ENGINEER = 'qa_engineer',
+    PRODUCT_MANAGER = 'product_manager',
+    DESIGNER = 'designer',
+    BUSINESS_ANALYST = 'business_analyst',
+    VIEWER = 'viewer'
+}
+
+const TEAM_ROLE_LABELS: Record<TeamRole, string> = {
+    [TeamRole.CEO]: 'CEO',
+    [TeamRole.CTO]: 'CTO',
+    [TeamRole.CFO]: 'CFO',
+    [TeamRole.ENGINEERING_MANAGER]: 'Engineering Manager',
+    [TeamRole.TECH_LEAD]: 'Tech Lead',
+    [TeamRole.DEVOPS_LEAD]: 'DevOps Lead',
+    [TeamRole.SENIOR_DEVELOPER]: 'Senior Developer',
+    [TeamRole.DEVELOPER]: 'Developer',
+    [TeamRole.JUNIOR_DEVELOPER]: 'Junior Developer',
+    [TeamRole.QA_LEAD]: 'QA Lead',
+    [TeamRole.QA_ENGINEER]: 'QA Engineer',
+    [TeamRole.PRODUCT_MANAGER]: 'Product Manager',
+    [TeamRole.DESIGNER]: 'Designer',
+    [TeamRole.BUSINESS_ANALYST]: 'Business Analyst',
+    [TeamRole.VIEWER]: 'Viewer'
+}
+
+const ROLE_ICONS: Record<TeamRole, any> = {
+    [TeamRole.CEO]: Crown,
+    [TeamRole.CTO]: Crown,
+    [TeamRole.CFO]: Crown,
+    [TeamRole.ENGINEERING_MANAGER]: Shield,
+    [TeamRole.TECH_LEAD]: Shield,
+    [TeamRole.DEVOPS_LEAD]: Shield,
+    [TeamRole.SENIOR_DEVELOPER]: Code,
+    [TeamRole.DEVELOPER]: Code,
+    [TeamRole.JUNIOR_DEVELOPER]: Code,
+    [TeamRole.QA_LEAD]: FlaskConical,
+    [TeamRole.QA_ENGINEER]: FlaskConical,
+    [TeamRole.PRODUCT_MANAGER]: BarChart,
+    [TeamRole.DESIGNER]: Palette,
+    [TeamRole.BUSINESS_ANALYST]: BarChart,
+    [TeamRole.VIEWER]: Eye
+}
 
 interface InviteMember {
     email: string
-    role: 'owner' | 'member'
+    role: TeamRole
     id: string
 }
 
 const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({ accessToken, teamId }) => {
     const [emails, setEmails] = useState<InviteMember[]>([])
     const [currentEmail, setCurrentEmail] = useState('')
-    const [currentRole, setCurrentRole] = useState<'owner' | 'member'>('member')
+    const [currentRole, setCurrentRole] = useState<TeamRole>(TeamRole.DEVELOPER)
     const [emailError, setEmailError] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [successMessage, setSuccessMessage] = useState('')
@@ -42,7 +96,7 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
 
         setEmails([...emails, { email: currentEmail, role: currentRole, id: Date.now().toString() }])
         setCurrentEmail('')
-        setCurrentRole('member')
+        setCurrentRole(TeamRole.DEVELOPER)
     }
 
     const handleRemoveEmail = (id: string) => {
@@ -72,7 +126,8 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
                 teamId: teamId,
                 invitations: emails.map(e => ({
                     email: e.email,
-                    role: e.role
+                    role: e.role,
+                    roleName: TEAM_ROLE_LABELS[e.role]
                 }))
             })
 
@@ -95,6 +150,16 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
         }
     }
 
+    const getRoleColor = (role: TeamRole) => {
+        const executiveRoles = [TeamRole.CEO, TeamRole.CTO, TeamRole.CFO]
+        const leadRoles = [TeamRole.ENGINEERING_MANAGER, TeamRole.TECH_LEAD, TeamRole.DEVOPS_LEAD, TeamRole.QA_LEAD]
+
+        if (executiveRoles.includes(role)) return 'purple'
+        if (leadRoles.includes(role)) return 'orange'
+        if (role === TeamRole.VIEWER) return 'gray'
+        return 'blue'
+    }
+
     return (
         <div className="flex h-full w-full flex-col">
             <div className="pb-4">
@@ -108,7 +173,7 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
             <div className="my-4 h-px w-full border-b border-neutral-800" />
 
             <div className="flex-1 space-y-6">
-                <div className="space-y-4">
+                <form className="space-y-4" onSubmit={e => e.preventDefault()}>
                     <div>
                         <label className="mb-2 block text-white">Email Address</label>
                         <div className="relative">
@@ -129,27 +194,31 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
 
                     <div>
                         <label className="mb-2 block text-white">Role</label>
-                        <div className="grid grid-cols-2 gap-3">
-                            <button onClick={() => setCurrentRole('member')} className={`flex items-center gap-3 rounded-md border p-4 transition-all ${currentRole === 'member' ? 'border-orange-500 bg-orange-500/10' : 'border-neutral-800 bg-[#0a0a0a] hover:border-neutral-700'}`}>
-                                <div className={`flex h-10 w-10 items-center justify-center rounded-full ${currentRole === 'member' ? 'bg-orange-500/20' : 'bg-neutral-800'}`}>
-                                    <User className={currentRole === 'member' ? 'text-orange-500' : 'text-gray-400'} size={20} />
-                                </div>
-                                <div className="text-left">
-                                    <p className="font-medium text-white">Member</p>
-                                    <p className="text-xs text-gray-400">Standard access</p>
-                                </div>
-                            </button>
-
-                            <button onClick={() => setCurrentRole('owner')} className={`flex items-center gap-3 rounded-md border p-4 transition-all ${currentRole === 'owner' ? 'border-orange-500 bg-orange-500/10' : 'border-neutral-800 bg-[#0a0a0a] hover:border-neutral-700'}`}>
-                                <div className={`flex h-10 w-10 items-center justify-center rounded-full ${currentRole === 'owner' ? 'bg-orange-500/20' : 'bg-neutral-800'}`}>
-                                    <Shield className={currentRole === 'owner' ? 'text-orange-500' : 'text-gray-400'} size={20} />
-                                </div>
-                                <div className="text-left">
-                                    <p className="font-medium text-white">Team Leader</p>
-                                    <p className="text-xs text-gray-400">Full access</p>
-                                </div>
-                            </button>
-                        </div>
+                        <select value={currentRole} onChange={e => setCurrentRole(e.target.value as TeamRole)} className="w-full cursor-pointer appearance-none rounded-md bg-[#0a0a0a] px-3 py-2 text-white focus:ring-2 focus:ring-gray-500 focus:outline-none" style={{ backgroundImage: 'none' }}>
+                            <optgroup label="Executive">
+                                <option value={TeamRole.CEO}>{TEAM_ROLE_LABELS[TeamRole.CEO]}</option>
+                                <option value={TeamRole.CTO}>{TEAM_ROLE_LABELS[TeamRole.CTO]}</option>
+                                <option value={TeamRole.CFO}>{TEAM_ROLE_LABELS[TeamRole.CFO]}</option>
+                            </optgroup>
+                            <optgroup label="Leadership">
+                                <option value={TeamRole.ENGINEERING_MANAGER}>{TEAM_ROLE_LABELS[TeamRole.ENGINEERING_MANAGER]}</option>
+                                <option value={TeamRole.TECH_LEAD}>{TEAM_ROLE_LABELS[TeamRole.TECH_LEAD]}</option>
+                                <option value={TeamRole.DEVOPS_LEAD}>{TEAM_ROLE_LABELS[TeamRole.DEVOPS_LEAD]}</option>
+                                <option value={TeamRole.QA_LEAD}>{TEAM_ROLE_LABELS[TeamRole.QA_LEAD]}</option>
+                                <option value={TeamRole.PRODUCT_MANAGER}>{TEAM_ROLE_LABELS[TeamRole.PRODUCT_MANAGER]}</option>
+                            </optgroup>
+                            <optgroup label="Development">
+                                <option value={TeamRole.SENIOR_DEVELOPER}>{TEAM_ROLE_LABELS[TeamRole.SENIOR_DEVELOPER]}</option>
+                                <option value={TeamRole.DEVELOPER}>{TEAM_ROLE_LABELS[TeamRole.DEVELOPER]}</option>
+                                <option value={TeamRole.JUNIOR_DEVELOPER}>{TEAM_ROLE_LABELS[TeamRole.JUNIOR_DEVELOPER]}</option>
+                            </optgroup>
+                            <optgroup label="Other">
+                                <option value={TeamRole.QA_ENGINEER}>{TEAM_ROLE_LABELS[TeamRole.QA_ENGINEER]}</option>
+                                <option value={TeamRole.DESIGNER}>{TEAM_ROLE_LABELS[TeamRole.DESIGNER]}</option>
+                                <option value={TeamRole.BUSINESS_ANALYST}>{TEAM_ROLE_LABELS[TeamRole.BUSINESS_ANALYST]}</option>
+                                <option value={TeamRole.VIEWER}>{TEAM_ROLE_LABELS[TeamRole.VIEWER]}</option>
+                            </optgroup>
+                        </select>
                     </div>
 
                     <button onClick={handleAddEmail} className="w-full cursor-pointer rounded-md border border-white px-6 py-2 text-white transition-colors hover:bg-[#ffffff1a]">
@@ -157,7 +226,7 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
                     </button>
 
                     {emailError && <p className="text-sm text-red-400">{emailError}</p>}
-                </div>
+                </form>
 
                 {emails.length > 0 && (
                     <div className="flex-1">
@@ -167,20 +236,26 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
                             </p>
                         </div>
                         <div className="max-h-[300px] space-y-2 overflow-y-auto rounded-md bg-[#0a0a0a] p-4">
-                            {emails.map(member => (
-                                <div key={member.id} className="flex items-center justify-between rounded-md border border-neutral-800 bg-[#1b1b1b] p-3 transition-colors hover:border-neutral-700">
-                                    <div className="flex items-center gap-3">
-                                        <div className={`flex h-8 w-8 items-center justify-center rounded-full ${member.role === 'owner' ? 'bg-orange-500/10' : 'bg-blue-500/10'}`}>{member.role === 'owner' ? <Shield className="text-orange-500" size={16} /> : <User className="text-blue-500" size={16} />}</div>
-                                        <div>
-                                            <p className="text-white">{member.email}</p>
-                                            <p className="text-xs text-gray-400">{member.role === 'owner' ? 'Team Leader' : 'Member'}</p>
+                            {emails.map(member => {
+                                const Icon = ROLE_ICONS[member.role]
+                                const color = getRoleColor(member.role)
+                                return (
+                                    <div key={member.id} className="flex items-center justify-between rounded-md border border-neutral-800 bg-[#1b1b1b] p-3 transition-colors hover:border-neutral-700">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`flex h-8 w-8 items-center justify-center rounded-full ${color === 'orange' ? 'bg-orange-500/10' : color === 'purple' ? 'bg-purple-500/10' : color === 'gray' ? 'bg-gray-500/10' : 'bg-blue-500/10'}`}>
+                                                <Icon className={color === 'orange' ? 'text-orange-500' : color === 'purple' ? 'text-purple-500' : color === 'gray' ? 'text-gray-500' : 'text-blue-500'} size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-white">{member.email}</p>
+                                                <p className="text-xs text-gray-400">{TEAM_ROLE_LABELS[member.role]}</p>
+                                            </div>
                                         </div>
+                                        <button onClick={() => handleRemoveEmail(member.id)} className="rounded p-1 text-gray-400 transition-colors hover:bg-neutral-800 hover:text-white">
+                                            <X size={18} />
+                                        </button>
                                     </div>
-                                    <button onClick={() => handleRemoveEmail(member.id)} className="rounded p-1 text-gray-400 transition-colors hover:bg-neutral-800 hover:text-white">
-                                        <X size={18} />
-                                    </button>
-                                </div>
-                            ))}
+                                )
+                            })}
                         </div>
                     </div>
                 )}
@@ -201,7 +276,7 @@ const InviteMemberDialog: React.FC<{ accessToken: string; teamId: string }> = ({
                         onClick={() => {
                             setEmails([])
                             setCurrentEmail('')
-                            setCurrentRole('member')
+                            setCurrentRole(TeamRole.DEVELOPER)
                             setEmailError('')
                             setSuccessMessage('')
                         }}

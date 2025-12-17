@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import logging from '../config/logging';
 import { CustomRequestValidationResult } from '../common/comon';
 import db from '../config/postgresql';
-import { formatDate, getDataRegion } from '../lib/utils';
+import { formatDate } from '../lib/utils';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import { getTeamInvitationEmailTemplate } from '../config/HTML_email_Templates';
@@ -26,7 +26,7 @@ const CreateTeam = async (req: Request, res: Response) => {
     try {
         const { accessToken, teamName, teamDescription } = req.body;
 
-        const region = getDataRegion(req);
+        const region = 'eu-central';
 
         const baseSlug = teamName
             .toLowerCase()
@@ -34,7 +34,6 @@ const CreateTeam = async (req: Request, res: Response) => {
             .replace(/^-|-$/g, '');
         const randomSuffix = Math.random().toString(36).substr(2, 6);
         const teamSlug = `${baseSlug}-${randomSuffix}`;
-
         const insertNewTeam = await db.query(
             `INSERT INTO teams (name, team_description, company_id, owner_user_id, data_region, slug) 
    VALUES (
@@ -51,13 +50,13 @@ const CreateTeam = async (req: Request, res: Response) => {
    RETURNING id`,
             [teamName, teamDescription, accessToken, region, teamSlug],
         );
+        console.log(insertNewTeam.rows[0]);
 
         await db.query(
-            `INSERT INTO team_members (team_id, user_id, role) 
+            `INSERT INTO team_members (team_id, user_id) 
    VALUES (
      $1, 
-     (SELECT user_id FROM sessions WHERE access_token = $2), 
-     'owner'
+     (SELECT user_id FROM sessions WHERE access_token = $2) 
    )`,
             [insertNewTeam.rows[0].id, accessToken],
         );
@@ -171,7 +170,6 @@ const InviteUser = async (req: Request, res: Response) => {
 
         return res.status(401).json({ error: true, errors: errors.array() });
     }
-
     try {
         const result = await db.query(
             `SELECT 
@@ -194,6 +192,7 @@ const InviteUser = async (req: Request, res: Response) => {
         const { companyname, teamname, invitername } = result.rows[0];
 
         const invitations = req.body.invitations || [];
+        console.log(invitations);
 
         if (invitations.length === 0) {
             return res.status(400).json({ error: 'No invitations provided' });
@@ -207,26 +206,24 @@ const InviteUser = async (req: Request, res: Response) => {
             },
         });
 
-        const invitationPromises = invitations.map(async (invitation: { email: string; role: string }) => {
+        const invitationPromises = invitations.map(async (invitation: { email: string; role: string; roleName: string }) => {
             const token = jwt.sign(
                 {
                     type: 'TEAM_INVITATION',
                     teamId: req.body.teamId,
                     invitedEmail: invitation.email,
                     invitedBy: invitername,
-                    role: invitation.role,
+                    role: invitation.roleName,
                     companyName: companyname,
                 },
                 process.env.TEAM_INVITATION_SECRET as string,
                 { expiresIn: '7d' },
             );
             const insertPromises = invitations.map((invitation: { email: string; role: string }) =>
-                db.query('INSERT INTO team_invitations (team_id, email, role, invited_by, created_at) VALUES ($1, $2, $3, (SELECT user_id FROM sessions WHERE access_token = $4), NOW())', [
-                    req.body.teamId,
-                    invitation.email,
-                    invitation.role,
-                    req.body.accessToken,
-                ]),
+                db.query(
+                    'INSERT INTO team_invitations (team_id, email, role, invited_by, created_at) VALUES ($1, $2, (SELECT id FROM roles WHERE name = $3), (SELECT user_id FROM sessions WHERE access_token = $4), NOW())',
+                    [req.body.teamId, invitation.email, invitation.role, req.body.accessToken],
+                ),
             );
             await Promise.all(insertPromises);
 
@@ -236,7 +233,7 @@ const InviteUser = async (req: Request, res: Response) => {
                 from: `"Obtura" <${process.env.EMAIL_USERNAME}>`,
                 to: invitation.email,
                 subject: `${invitername} invited you to join ${teamname} on Obtura`,
-                html: getTeamInvitationEmailTemplate(invitation.email, invitername, teamname, companyname, inviteLink),
+                html: getTeamInvitationEmailTemplate(invitation.email, invitername, teamname, companyname, inviteLink, invitation.roleName),
             };
 
             return transporter.sendMail(mailOptions);
@@ -257,78 +254,99 @@ const InviteUser = async (req: Request, res: Response) => {
 const AcceptInvitation = async (req: Request, res: Response) => {
     const errors = CustomRequestValidationResult(req);
     if (!errors.isEmpty()) {
-        errors.array().map((error) => {
-            logging.error('ACCEPT-INVITATION', error.errorMsg);
-        });
-
         return res.status(401).json({ error: true, errors: errors.array() });
     }
 
+    const client = await db.connect();
+
     try {
-        const result = await db.query(
+        await client.query('BEGIN');
+
+        const userResult = await client.query(
             `
-            WITH user_data AS (
-                SELECT 
-                    s.user_id,
-                    u.email
-                FROM sessions s
-                JOIN users u ON u.id = s.user_id
-                WHERE s.access_token = $2
-            )
-            INSERT INTO team_members (team_id, user_id, role)
-            SELECT
-                $1,
-                user_data.user_id,
-                ti.role
-            FROM user_data
-            JOIN team_invitations ti 
-                ON ti.team_id = $1 
-                AND ti.email = user_data.email
-                AND ti.status = 'pending'
-            RETURNING *;
+            SELECT u.id AS userid, u.email
+            FROM sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.access_token = $1
             `,
-            [req.body.teamId, req.body.accessToken],
+            [req.body.accessToken],
         );
 
-        if (result.rowCount === 0) {
+        if (userResult.rowCount === 0) {
+            return res.status(404).json({ error: 'User not found or invalid access' });
+        }
+
+        const { userid, email } = userResult.rows[0];
+
+        const invitationResult = await client.query(
+            `
+            SELECT id, role
+            FROM team_invitations
+            WHERE team_id = $1
+              AND email = $2
+              AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+            `,
+            [req.body.teamId, email],
+        );
+
+        if (invitationResult.rowCount === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({
-                error: 'Invitation not found, already accepted, or invalid access',
+                error: 'Invitation not found or already accepted',
             });
         }
 
-        const userID = result.rows[0].user_id;
+        const { id: invitationId, role } = invitationResult.rows[0];
 
-        const teamResult = await db.query(`SELECT company_id FROM teams WHERE id = $1`, [req.body.teamId]);
+        await client.query(
+            `
+            INSERT INTO team_members (team_id, user_id)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+            `,
+            [req.body.teamId, userid],
+        );
+
+        const teamResult = await client.query(`SELECT company_id FROM teams WHERE id = $1`, [req.body.teamId]);
 
         if (teamResult.rowCount === 0) {
-            return res.status(404).json({ error: 'Team not found' });
+            throw new Error('Team not found');
         }
 
         const companyId = teamResult.rows[0].company_id;
 
-        await db.query(
+        await client.query(
             `
             INSERT INTO company_users (company_id, user_id, role)
             VALUES ($1, $2, $3)
             ON CONFLICT (company_id, user_id) DO NOTHING
             `,
-            [companyId, userID, 'member'],
+            [companyId, userid, role],
         );
 
-        await db.query(
-            `UPDATE team_invitations 
-             SET status = $1, updated_at = NOW() 
-             WHERE team_id = $2 AND email = $3`,
-            ['accepted', req.body.teamId, result.rows[0].email],
+        await client.query(
+            `
+            UPDATE team_invitations
+            SET status = 'accepted', updated_at = NOW()
+            WHERE id = $1
+            `,
+            [invitationId],
         );
+
+        await client.query('COMMIT');
 
         res.status(200).json({
             success: true,
             message: 'Invitation accepted successfully',
         });
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('Accept invitation error:', error);
         res.status(500).json({ error: 'Failed to accept invitation' });
+    } finally {
+        client.release();
     }
 };
 
@@ -347,19 +365,29 @@ const GetTeamData = async (req: Request, res: Response) => {
 
         const result = await db.query(
             `SELECT 
-                u.id,
-                u.name, 
-                u.email, 
-                tm.role,
-                t.name as teamName,
-                CASE WHEN u.id = s.user_id THEN true ELSE false END as is_you
-            FROM team_members as tm 
-            JOIN users u ON u.id = tm.user_id 
-            JOIN teams t ON t.id = tm.team_id
-            CROSS JOIN sessions s
-            WHERE tm.team_id = $1 
-                AND s.access_token = $2 
-                AND s.expires_at > NOW()`,
+    u.id,
+    u.name, 
+    u.email, 
+    r.display_name AS roleName,
+    t.name AS teamName,
+    CASE 
+        WHEN u.id = s.user_id THEN true 
+        ELSE false 
+    END AS is_you,
+    CASE
+        WHEN r.hierarchy_level < 6 THEN true 
+        ELSE false
+    END AS can_edit
+FROM team_members AS tm 
+JOIN users u ON u.id = tm.user_id 
+JOIN teams t ON t.id = tm.team_id
+JOIN company_users cu ON cu.user_id = u.id
+JOIN roles r ON r.id = cu.role
+CROSS JOIN sessions s
+WHERE tm.team_id = $1 
+  AND s.access_token = $2 
+  AND s.expires_at > NOW();
+`,
             [teamId, accessToken],
         );
 

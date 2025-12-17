@@ -6,6 +6,7 @@ import TeamInvitation from '@/features/teams/TeamInvitation'
 import { AlertCircle } from 'lucide-react'
 import jwt from 'jsonwebtoken'
 import { InvitationData } from '@/features/teams/types/TeamTypes'
+import { apiClient } from '@/lib/utils'
 
 interface InvitationPageProps {
     params: {
@@ -22,10 +23,10 @@ const Invitation = async ({ params }: InvitationPageProps) => {
             return <AuthRequired featureAccess="invitations" />
         }
 
-        const response = await axios.get<{ hasCompany: boolean }>(`${process.env.BACKEND_URL}/account-manager/check-company-status/${session.backendToken}`)
+        const response = await apiClient.get<{ hasCompany: boolean }>(`${process.env.BACKEND_URL}/account-manager/check-company-status/${session.backendToken}`)
 
         const invitationData = jwt.verify(InvitationId, process.env.TEAM_INVITATION_SECRET as string)
-
+        
         if (response.data.hasCompany) {
             return <CompanyRequired featureAccess="invitations" />
         }
@@ -39,7 +40,6 @@ const Invitation = async ({ params }: InvitationPageProps) => {
         const isJWTError = error instanceof Error && (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError' || error.name === 'NotBeforeError')
 
         const errorMessage = isJWTError ? (error instanceof Error ? error.message : 'Invalid signature') : 'Unable to load invitation. Please try again later.'
-
         return (
             <div className="flex min-h-screen items-center justify-center p-8">
                 <div className="w-full max-w-md rounded-lg border border-zinc-800 bg-[#1b1b1b] p-8 text-center">

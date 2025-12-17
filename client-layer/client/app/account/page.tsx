@@ -1,8 +1,9 @@
 import { auth } from '@/features/account/auth/auth'
 import AuthRequired from '@/common-components/AuthRequredForm'
 import UserAccount from '@/features/account/UserAccount'
-import axios from 'axios'
 import { UserResponse } from '@/features/account/types/AccoutTypes'
+import { apiClient } from '@/lib/utils'
+import { getErrorComponent } from '@/lib/errorHandlers'
 
 const Account = async () => {
     const session = await auth()
@@ -12,10 +13,9 @@ const Account = async () => {
             return <AuthRequired featureAccess="account" />
         }
 
-        const resp = await axios.get<UserResponse>(`${process.env.BACKEND_URL}/account-manager/get-account-data/${session.backendToken}`)
-        if (resp.status !== 200) {
-            return <AuthRequired featureAccess="account" />
-        }
+        const resp = await apiClient.get<UserResponse>(`${process.env.BACKEND_URL}/account-manager/get-account-data/${session.backendToken}`)
+        const errorComponent = getErrorComponent(resp.status, 'account')
+        if (errorComponent) return errorComponent
 
         return (
             <div>

@@ -1,7 +1,6 @@
 
 -- Minimal enums
 CREATE TYPE user_status AS ENUM ('active', 'suspended', 'deleted');
-CREATE TYPE team_role AS ENUM ('owner', 'admin', 'member');
 CREATE TYPE data_region AS ENUM ('eu-central', 'eu-west', 'eu-north');
 
 
@@ -11,9 +10,11 @@ CREATE TABLE users (
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255),
     avatar_url TEXT,
-    
+    phone_number VARCHAR(20),
+
     password_hash TEXT,
     email_verified BOOLEAN DEFAULT false,
+    
     
     status user_status DEFAULT 'active',
     

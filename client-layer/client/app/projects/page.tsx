@@ -1,10 +1,8 @@
 import { auth } from '@/features/account/auth/auth'
 import AuthRequired from '@/common-components/AuthRequredForm'
 import axios from 'axios'
-import { UserResponse } from '@/features/account/types/AccoutTypes'
 import UserProjects from '@/features/projects/UserProjects'
 import CompanyRequired from '@/common-components/CompayRequired'
-import { useAccountStore } from '@/lib/store/accountStore'
 
 const Projects = async () => {
     const session = await auth()
@@ -13,7 +11,7 @@ const Projects = async () => {
         if (!session || !session.user) {
             return <AuthRequired featureAccess="projects" />
         }
-        const response = await axios.get<{ hasCompany: boolean }>(`${process.env.BACKEND_URL}/account-manager/check-company-status/${session.backendToken}`)
+        const response = await axios.get<{ hasCompany: boolean }>(`${process.env.BACKEND_URL}/company-manager/check-company-status/${session.backendToken}`)
 
         if (!response.data.hasCompany) {
             return <CompanyRequired featureAccess="projects" />

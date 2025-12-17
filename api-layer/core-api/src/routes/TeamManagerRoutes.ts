@@ -1,86 +1,97 @@
+// TeamManagerRoutes.ts
 import express from 'express';
 import { body, param } from 'express-validator';
 
 import TeamServices from '../Services/TeamServices';
+import { createRBACMiddleware } from '../middlewares/RBACSystem';
+import { PermissionResource, PermissionAction, TeamRole } from '../middlewares/RBACTypes';
+import pool from '../config/postgresql';
 
 const router = express.Router();
+const rbac = createRBACMiddleware(pool);
 
+// Public routes
 router.post(
     '/create-team',
-    body('accessToken').notEmpty().withMessage('Access token is required').isString().withMessage('Access token must be a string'),
-    body('teamName').notEmpty().withMessage('Team name is required').isString().trim().isLength({ min: 2, max: 100 }).withMessage('Team name must be between 2 and 100 characters'),
-    body('teamDescription').optional().isString().trim().isLength({ max: 500 }).withMessage('Team description must not exceed 500 characters'),
+    body('accessToken').notEmpty().isString(),
+    body('teamName').notEmpty().isString().trim().isLength({ min: 2, max: 100 }),
+    body('teamDescription').optional().isString().trim().isLength({ max: 500 }),
+    rbac.authenticate,
+    rbac.loadTeamMember,
+    rbac.requirePermission(PermissionResource.TEAM, PermissionAction.CREATE),
     TeamServices.CreateTeam,
 );
 
-router.get('/get-teams/:accessToken', param('accessToken').notEmpty().withMessage('Access token is required').isString(), TeamServices.GetTeams);
+router.get('/get-teams/:accessToken', param('accessToken').notEmpty().isString(), rbac.authenticate, TeamServices.GetTeams);
 
+router.post('/accept-invitation', body('accessToken').notEmpty().isString(), body('teamId').notEmpty().isString(), rbac.authenticate, TeamServices.AcceptInvitation);
+
+// Protected routes
 router.get(
     '/get-team-data/:accessToken/:teamId',
-    param('accessToken').notEmpty().withMessage('Access token is required').isString(),
-    param('teamId').notEmpty().withMessage('Team ID is required').isString(),
+    param('accessToken').notEmpty().isString(),
+    param('teamId').notEmpty().isString(),
+    rbac.authenticate,
+    rbac.loadTeamMember,
+    rbac.requirePermission(PermissionResource.TEAM, PermissionAction.READ),
     TeamServices.GetTeamData,
-);
-
-router.post(
-    '/accept-invitation',
-    body('accessToken').notEmpty().withMessage('Access token is required').isString(),
-    body('teamId').notEmpty().withMessage('Team ID is required').isString(),
-    TeamServices.AcceptInvitation,
 );
 
 router.put(
     '/update-team',
-    body('accessToken').notEmpty().withMessage('Access token is required').isString(),
-    body('teamId').notEmpty().withMessage('Team ID is required').isString(),
-    body('teamName').notEmpty().withMessage('Team name is required').isString().trim().isLength({ min: 2, max: 100 }).withMessage('Team name must be between 2 and 100 characters'),
-    body('teamDescription').optional().isString().trim().isLength({ max: 500 }).withMessage('Team description must not exceed 500 characters'),
+    body('accessToken').notEmpty().isString(),
+    body('teamId').notEmpty().isString(),
+    body('teamName').notEmpty().isString().trim().isLength({ min: 2, max: 100 }),
+    body('teamDescription').optional().isString().trim().isLength({ max: 500 }),
+    rbac.authenticate,
+    rbac.loadTeamMember,
+    rbac.requirePermission(PermissionResource.TEAM, PermissionAction.UPDATE),
     TeamServices.UpdateTeam,
 );
 
-router.delete('/delete-team', body('accessToken').notEmpty().withMessage('Access token is required').isString(), body('teamId').notEmpty().withMessage('Team ID is required').isString(), TeamServices.DeleteTeam);
+router.delete(
+    '/delete-team',
+    body('accessToken').notEmpty().isString(),
+    body('teamId').notEmpty().isString(),
+    rbac.authenticate,
+    rbac.loadTeamMember,
+    rbac.requirePermission(PermissionResource.TEAM, PermissionAction.DELETE),
+    TeamServices.DeleteTeam,
+);
 
 router.post(
     '/invite-members',
-    body('accessToken').notEmpty().withMessage('Access token is required').isString(),
-    body('teamId').notEmpty().withMessage('Team ID is required').isString(),
-    body('invitations')
-        .notEmpty()
-        .withMessage('Invitations array is required')
-        .isArray({ min: 1 })
-        .withMessage('Invitations must be a non-empty array')
-        .custom((invitations) => {
-            for (const invitation of invitations) {
-                if (!invitation.email || typeof invitation.email !== 'string') {
-                    throw new Error('Each invitation must have a valid email');
-                }
-                if (!invitation.role || !['owner', 'member'].includes(invitation.role)) {
-                    throw new Error('Each invitation must have a valid role (owner or member)');
-                }
-                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                if (!emailRegex.test(invitation.email)) {
-                    throw new Error(`Invalid email format: ${invitation.email}`);
-                }
-            }
-            return true;
-        }),
+    body('accessToken').notEmpty().isString(),
+    body('teamId').notEmpty().isString(),
+    body('invitations').notEmpty().isArray({ min: 1 }),
+    rbac.authenticate,
+    rbac.loadTeamMember,
+    rbac.requirePermission(PermissionResource.MEMBERS, PermissionAction.INVITE),
     TeamServices.InviteUser,
 );
 
 router.post(
     '/promote-member',
-    body('accessToken').notEmpty().withMessage('Access token is required').isString(),
-    body('teamId').notEmpty().withMessage('Team ID is required').isString(),
-    body('userId').notEmpty().withMessage('User ID is required').isString(),
-    body('role').notEmpty().withMessage('Role is required').isIn(['owner', 'member']).withMessage('Role must be "owner" or "member"'),
+    body('accessToken').notEmpty().isString(),
+    body('teamId').notEmpty().isString(),
+    body('userId').notEmpty().isString(),
+    body('role').notEmpty().isIn(Object.values(TeamRole)),
+    rbac.authenticate,
+    rbac.loadTeamMember,
+    rbac.requirePermission(PermissionResource.MEMBERS, PermissionAction.PROMOTE),
+    rbac.canManageUser,
     TeamServices.PromoteMember,
 );
 
 router.delete(
     '/remove-member',
-    body('accessToken').notEmpty().withMessage('Access token is required').isString(),
-    body('teamId').notEmpty().withMessage('Team ID is required').isString(),
-    body('userId').notEmpty().withMessage('User ID is required').isString(),
+    body('accessToken').notEmpty().isString(),
+    body('teamId').notEmpty().isString(),
+    body('userId').notEmpty().isString(),
+    rbac.authenticate,
+    rbac.loadTeamMember,
+    rbac.requirePermission(PermissionResource.MEMBERS, PermissionAction.REMOVE),
+    rbac.canManageUser,
     TeamServices.RemoveMember,
 );
 

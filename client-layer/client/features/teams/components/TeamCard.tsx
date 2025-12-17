@@ -15,7 +15,7 @@ const TeamCard: React.FC<TeamData> = ({ id, name, updated_at, memberCount, is_ac
                     <div>
                         <h3 className="mb-1 text-xl font-semibold">{name}</h3>
                         <p className="text-sm text-gray-400">
-                            {memberCount} members · Updated {updated_at}
+                            {memberCount} members · Updated {updated_at}    
                         </p>
                     </div>
                 </div>

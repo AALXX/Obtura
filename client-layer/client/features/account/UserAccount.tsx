@@ -95,7 +95,7 @@ const UserAccount: React.FC<UserResponse & { userAccessToken: string; userImg: s
                                     <p className="text-xs font-medium text-white sm:text-sm">Company Name</p>
                                     <p className="text-xs text-gray-400 sm:text-sm">{companyName}</p>
                                 </div>
-                                {companyRole && <span className="rounded bg-orange-500/20 px-2 py-1 text-xs font-medium text-orange-500 capitalize">{companyRole}</span>}
+                                {companyRole && <span className="rounded bg-orange-500/20 px-2 py-1 text-xs text-orange-500">{companyRole.display_name}</span>}
                             </div>
                         </div>
                     </div>

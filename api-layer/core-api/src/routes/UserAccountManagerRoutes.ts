@@ -8,20 +8,6 @@ const router = express.Router();
 
 router.post('/register-account-google', body('idToken').not().isEmpty(), body('accessToken').not().isEmpty(), body('user').not().isEmpty(), AccountRegistrationServices.RegisterUserWithGoogle);
 
-router.get('/check-company-status/:accessToken', body('accessToken').not().isEmpty(), AccountRegistrationServices.CheckCompanyStatus);
-
-router.post(
-    '/complete-company-setup',
-    [
-        body('companyName').notEmpty().withMessage('Company name is required'),
-        body('companySize').notEmpty().withMessage('Company size is required'),
-        body('accessToken').notEmpty().withMessage('Access token is required'),
-        body('userRole').notEmpty().withMessage('User role is required'),
-        body('subscriptionPlan').optional().isIn(['starter', 'professional', 'business', 'enterprise']).withMessage('Invalid subscription plan'),
-    ],
-    AccountRegistrationServices.CompleteCompanySetup,
-);
-
 // router.post('/register-account', body('userName').not().isEmpty(), body('userEmail').isEmail().not().isEmpty(), body('password').isLength({ min: 4 }).not().isEmpty().trim(), AccountServices.RegisterUser);
 
 // router.post('/login-account', body('userEmail').isEmail().not().isEmpty(), body('password').isLength({ min: 6 }).not().isEmpty().trim(), AccountServices.LoginUser);

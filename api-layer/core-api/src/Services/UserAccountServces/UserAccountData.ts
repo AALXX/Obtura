@@ -25,123 +25,97 @@ const GetUserAccountData = async (req: Request, res: Response) => {
 
     try {
         const query = `
-            SELECT 
-                u.id,
-                u.email,
-                u.name,
-                u.created_at,
-                u.updated_at,
+SELECT 
+    u.id,
+    u.email,
+    u.name,
+    u.created_at,
+    u.updated_at,
 
-                -- OAuth accounts
-                json_agg(
-                    DISTINCT jsonb_build_object(
-                        'id', oa.id,
-                        'provider', oa.provider,
-                        'provider_account_id', oa.provider_account_id,
-                        'expires_at', oa.expires_at,
-                        'created_at', oa.created_at
-                    )
-                ) FILTER (WHERE oa.id IS NOT NULL) AS oauth_accounts,
+    json_agg(
+        DISTINCT jsonb_build_object(
+            'id', oa.id,
+            'provider', oa.provider,
+            'provider_account_id', oa.provider_account_id,
+            'expires_at', oa.expires_at,
+            'created_at', oa.created_at
+        )
+    ) FILTER (WHERE oa.id IS NOT NULL) AS oauth_accounts,
 
-                -- Active sessions
-                json_agg(
-                    DISTINCT jsonb_build_object(
-                        'id', s.id,
-                        'expires_at', s.expires_at,
-                        'last_used_at', s.last_used_at,
-                        'ip_address', s.ip_address,
-                        'user_agent', s.user_agent,
-                        'created_at', s.created_at
-                    )
-                ) FILTER (WHERE s.id IS NOT NULL AND s.expires_at > NOW()) AS active_sessions,
+    json_agg(
+        DISTINCT jsonb_build_object(
+            'id', s.id,
+            'expires_at', s.expires_at,
+            'last_used_at', s.last_used_at,
+            'ip_address', s.ip_address,
+            'user_agent', s.user_agent,
+            'created_at', s.created_at
+        )
+    ) FILTER (WHERE s.id IS NOT NULL AND s.expires_at > NOW()) AS active_sessions,
 
-                -- Company information (user's primary company)
-                (
-                    SELECT jsonb_build_object(
-                        'id', c.id,
-                        'name', c.name,
-                        'slug', c.slug,
-                        'role', CASE 
-                            WHEN c.owner_user_id = u.id THEN 'owner'
-                            ELSE (
-                                SELECT tm.role 
-                                FROM teams t
-                                JOIN team_members tm ON tm.team_id = t.id
-                                WHERE t.company_id = c.id 
-                                AND tm.user_id = u.id
-                                AND tm.role IN ('admin', 'owner')
-                                LIMIT 1
-                            )
-                        END,
-                        'is_active', c.is_active
-                    )
-                    FROM companies c
-                    WHERE c.owner_user_id = u.id 
-                    OR EXISTS (
-                        SELECT 1 
-                        FROM teams t
-                        JOIN team_members tm ON tm.team_id = t.id
-                        WHERE t.company_id = c.id 
-                        AND tm.user_id = u.id
-                    )
-                    ORDER BY 
-                        CASE WHEN c.owner_user_id = u.id THEN 0 ELSE 1 END,
-                        c.created_at DESC
-                    LIMIT 1
-                ) AS company,
+    (
+        SELECT jsonb_build_object(
+            'id', c.id,
+            'name', c.name,
+            'slug', c.slug,
+            'role', jsonb_build_object(
+                'name', r.name,
+                'display_name', r.display_name,
+                'hierarchy_level', r.hierarchy_level
+            ),
+            'is_active', c.is_active
+        )
+        FROM companies c
+        JOIN company_users cu
+            ON cu.company_id = c.id
+           AND cu.user_id = u.id
+        JOIN roles r
+            ON r.id = cu.role
+        ORDER BY c.created_at DESC
+        LIMIT 1
+    ) AS company,
 
-                -- Current subscription (for user's company)
-                (
-                    SELECT jsonb_build_object(
-                        'id', sub.id,
-                        'status', sub.status,
-                        'current_period_start', sub.current_period_start,
-                        'current_period_end', sub.current_period_end,
-                        'cancel_at_period_end', sub.cancel_at_period_end,
-                        'current_users_count', sub.current_users_count,
-                        'current_projects_count', sub.current_projects_count,
-                        'current_deployments_count', sub.current_deployments_count,
-                        'current_storage_used_gb', sub.current_storage_used_gb,
-                        'trial_end', sub.trial_end,
-                        'plan', jsonb_build_object(
-                            'id', sp.id,
-                            'name', sp.name,
-                            'price_monthly', sp.price_monthly,
-                            'max_users', sp.max_users,
-                            'max_projects', sp.max_projects,
-                            'max_deployments_per_month', sp.max_deployments_per_month,
-                            'max_apps', sp.max_apps,
-                            'storage_gb', sp.storage_gb,
-                            'description', sp.description
-                        )
-                    )
-                    FROM subscriptions sub
-                    INNER JOIN subscription_plans sp ON sp.id = sub.plan_id
-                    INNER JOIN companies c ON c.id = sub.company_id
-                    WHERE (
-                        c.owner_user_id = u.id 
-                        OR EXISTS (
-                            SELECT 1 
-                            FROM teams t
-                            JOIN team_members tm ON tm.team_id = t.id
-                            WHERE t.company_id = c.id 
-                            AND tm.user_id = u.id
-                        )
-                    )
-                    AND sub.status IN ('active', 'trialing', 'past_due')
-                    ORDER BY 
-                        CASE WHEN c.owner_user_id = u.id THEN 0 ELSE 1 END,
-                        sub.current_period_end DESC
-                    LIMIT 1
-                ) AS subscription
+    (
+        SELECT jsonb_build_object(
+            'id', sub.id,
+            'status', sub.status,
+            'current_period_start', sub.current_period_start,
+            'current_period_end', sub.current_period_end,
+            'cancel_at_period_end', sub.cancel_at_period_end,
+            'current_users_count', sub.current_users_count,
+            'current_projects_count', sub.current_projects_count,
+            'current_deployments_count', sub.current_deployments_count,
+            'current_storage_used_gb', sub.current_storage_used_gb,
+            'trial_end', sub.trial_end,
+            'plan', jsonb_build_object(
+                'id', sp.id,
+                'name', sp.name,
+                'price_monthly', sp.price_monthly,
+                'max_users', sp.max_users,
+                'max_projects', sp.max_projects,
+                'max_deployments_per_month', sp.max_deployments_per_month,
+                'max_apps', sp.max_apps,
+                'storage_gb', sp.storage_gb,
+                'description', sp.description
+            )
+        )
+        FROM subscriptions sub
+        JOIN subscription_plans sp ON sp.id = sub.plan_id
+        JOIN company_users cu
+            ON cu.company_id = sub.company_id
+           AND cu.user_id = u.id
+        WHERE sub.status IN ('active', 'trialing', 'past_due')
+        ORDER BY sub.current_period_end DESC
+        LIMIT 1
+    ) AS subscription
 
-            FROM sessions s
-            INNER JOIN users u ON s.user_id = u.id
-            LEFT JOIN oauth_accounts oa ON u.id = oa.user_id
-            WHERE s.access_token = $1
-              AND s.expires_at > NOW()
-            GROUP BY u.id;
-        `;
+FROM sessions s
+JOIN users u ON s.user_id = u.id
+LEFT JOIN oauth_accounts oa ON oa.user_id = u.id
+WHERE s.access_token = $1
+  AND s.expires_at > NOW()
+GROUP BY u.id;
+`;
 
         const response = await db.query(query, [req.params.accessToken]);
 
@@ -154,10 +128,8 @@ const GetUserAccountData = async (req: Request, res: Response) => {
 
         const userData = response.rows[0];
 
-        // Update session last used timestamp
         await db.query('UPDATE sessions SET last_used_at = NOW() WHERE access_token = $1', [req.params.accessToken]);
 
-        // Determine account type
         const accountType = userData.oauth_accounts && userData.oauth_accounts.length > 0 ? userData.oauth_accounts[0].provider : 'email';
 
         return res.status(200).json({
@@ -170,7 +142,7 @@ const GetUserAccountData = async (req: Request, res: Response) => {
             userSubscription: userData.subscription,
             hasCompany: !!userData.company,
             companyName: userData.company?.name || null,
-            companyRole: userData.company?.role || 'member',
+            companyRole: userData.company?.role,
         });
     } catch (error: any) {
         logging.error('GET-USER-ACCOUNT-DATA', error.message);
@@ -181,7 +153,6 @@ const GetUserAccountData = async (req: Request, res: Response) => {
         });
     }
 };
-
 
 const ChangeUserData = async (req: Request, res: Response) => {
     const errors = CustomRequestValidationResult(req);

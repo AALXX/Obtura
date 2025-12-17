@@ -29,7 +29,7 @@ CREATE INDEX idx_companies_slug ON companies(slug);
 CREATE TABLE company_users (
     company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    role VARCHAR(50) DEFAULT 'member', -- 'owner', 'billing_admin', 'member'
+    role UUID NOT NULL REFERENCES roles(id),
     PRIMARY KEY (company_id, user_id)
 );
 

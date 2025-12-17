@@ -106,3 +106,65 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER log_subscription_changes_trigger
     AFTER INSERT OR UPDATE ON subscriptions
     FOR EACH ROW EXECUTE FUNCTION log_subscription_changes();
+
+    INSERT INTO subscription_plans (
+    id,
+    name,
+    price_monthly,
+    max_users,
+    max_projects,
+    max_deployments_per_month,
+    max_apps,
+    storage_gb,
+    description,
+    is_active
+) VALUES
+(
+    'starter',
+    'Starter',
+    79.00,
+    8,
+    5,
+    100,
+    5,
+    10,
+    'Perfect for small teams starting with DevOps automation',
+    TRUE
+),
+(
+    'team',
+    'Team',
+    299.00,
+    25,
+    15,
+    500,
+    10,
+    50,
+    'For growing teams with multiple projects',
+    TRUE
+),
+(
+    'business',
+    'Business',
+    799.00,
+    50,
+    30,
+    1000,
+    25,
+    3072, -- 3 TB
+    'For established SMEs with complex needs',
+    TRUE
+),
+(
+    'enterprise',
+    'Enterprise',
+    2199.00,
+    NULL, -- unlimited users
+    NULL, -- unlimited projects
+    NULL, -- unlimited deployments
+    NULL, -- unlimited apps
+    5120, -- 5 TB
+    'Custom limits for large organizations',
+    TRUE
+);
+

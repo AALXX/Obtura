@@ -60,6 +60,7 @@ const NavBar = () => {
     const navItems = [
         { href: '/projects', label: 'Projects', icon: FolderKanban },
         { href: '/deployments', label: 'Deployments', icon: Rocket },
+        { href: '/employees', label: 'Employees', icon: Users },
         { href: '/team', label: 'Team', icon: Users }
     ]
 
@@ -92,8 +93,8 @@ const NavBar = () => {
                     <div className="flex items-center">
                         <Link href="/" className="group flex items-center">
                             <div className="flex items-center gap-2">
-                                <Image src="/logo.png" width={1000} height={100} alt="Obtura Logo " className='h-12 w-12'/>
-                               
+                                <Image src="/logo.png" width={1000} height={100} alt="Obtura Logo " className="h-12 w-12" />
+
                                 <h1 className="text-lg font-semibold tracking-tight text-white transition-colors group-hover:text-neutral-100">Obtura</h1>
                             </div>
                         </Link>

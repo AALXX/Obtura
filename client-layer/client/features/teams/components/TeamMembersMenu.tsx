@@ -32,13 +32,13 @@ const MemberActionMenu: React.FC<MemberActionMenuProps> = ({ member, onRemove, o
 
     return (
         <div className="relative" ref={menuRef}>
-            <button onClick={() => setIsOpen(!isOpen)} className="rounded p-1 text-gray-400 transition-colors hover:bg-zinc-800 hover:text-white cursor-pointer">
+            <button onClick={() => setIsOpen(!isOpen)} className="cursor-pointer rounded p-1 text-gray-400 transition-colors hover:bg-zinc-800 hover:text-white">
                 <MoreVertical className="h-5 w-5" />
             </button>
 
             {isOpen && (
                 <div className="absolute top-full right-0 z-10 mt-2 w-48 rounded-lg border border-zinc-800 bg-[#1b1b1b] py-2 shadow-xl">
-                    {member.role !== 'owner' && (
+                    {member.can_edit && (
                         <button
                             onClick={() => {
                                 onPromote(member.id)
@@ -51,7 +51,7 @@ const MemberActionMenu: React.FC<MemberActionMenuProps> = ({ member, onRemove, o
                         </button>
                     )}
 
-                    {member.role === 'owner' && (
+                    {member.can_edit && (
                         <button
                             onClick={() => {
                                 onDemote(member.id)

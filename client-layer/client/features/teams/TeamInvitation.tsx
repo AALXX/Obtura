@@ -120,7 +120,7 @@ const TeamInvitation: React.FC<{ invitationData: InvitationData; accessToken?: s
                             <Shield className="mt-1 h-5 w-5 text-gray-400" />
                             <div>
                                 <p className="text-sm text-gray-400">Role</p>
-                                <span className={`inline-block rounded-lg px-3 py-1 text-sm font-medium ${invitationData?.role === 'owner' ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-gray-400'}`}>{invitationData?.role === 'owner' ? 'Team Leader' : 'Member'}</span>
+                                <span className={`inline-block rounded-lg bg-orange-500 px-3 py-1 text-sm font-medium text-white`}>{invitationData?.role}</span>
                             </div>
                         </div>
 
@@ -136,10 +136,10 @@ const TeamInvitation: React.FC<{ invitationData: InvitationData; accessToken?: s
                     {error && <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-500">{error}</div>}
 
                     <div className="flex gap-3">
-                        <button onClick={handleDecline} disabled={accepting} className="flex-1 rounded-lg border border-zinc-700 bg-transparent px-6 py-2.5 font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                        <button onClick={handleDecline} disabled={accepting} className="flex-1 cursor-pointer rounded-lg border border-zinc-700 bg-transparent px-6 py-2.5 font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50">
                             Decline
                         </button>
-                        <button onClick={handleAccept} disabled={accepting} className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-2.5 font-medium text-white transition-colors hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                        <button onClick={handleAccept} disabled={accepting} className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-2.5 font-medium text-white transition-colors hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50">
                             {accepting ? (
                                 <>
                                     <Loader2 className="h-4 w-4 animate-spin" />

@@ -34,5 +34,5 @@ export interface UserResponse {
     activeSessions: SessionInfo[]
     userSubscription: UserSubscription | null
     companyName?: string
-    companyRole?: 'owner' | 'admin' | 'member'
+    companyRole?: {name: string, display_name: string}
 }

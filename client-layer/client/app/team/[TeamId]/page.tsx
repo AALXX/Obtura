@@ -4,21 +4,9 @@ import axios from 'axios'
 import CompanyRequired from '@/common-components/CompayRequired'
 import { TeamData, TeamMemberData } from '@/features/teams/types/TeamTypes'
 import TeamDetails from '@/features/teams/TeamDetails'
-
-const getCompanyTeamData = async ({ accessToken, teamId }: { accessToken: string; teamId: string }): Promise<{ members: TeamMemberData[] }> => {
-    try {
-        const response = await axios.get<{ members: TeamMemberData[] }>(`${process.env.BACKEND_URL}/teams-manager/get-team-data/${accessToken}/${teamId}`)
-
-        if (response.status === 401) {
-            throw new Error('Unauthorized')
-        }
-
-        return response.data
-    } catch (error) {
-        console.error('Error getting company teams:', error)
-        throw error
-    }
-}
+import Unauthorized from '@/common-components/UnauthorizedAcces'
+import { apiClient } from '@/lib/utils'
+import { getErrorComponent } from '@/lib/errorHandlers'
 
 const TeamDetailsPage: React.FC<{ params: { TeamId: string } }> = async ({ params }) => {
     const session = await auth()
@@ -26,19 +14,23 @@ const TeamDetailsPage: React.FC<{ params: { TeamId: string } }> = async ({ param
 
     try {
         if (!session || !session.user) {
-            return <AuthRequired featureAccess="projects" />
+            return <AuthRequired featureAccess="teams" />
         }
-        const response = await axios.get<{ hasCompany: boolean }>(`${process.env.BACKEND_URL}/account-manager/check-company-status/${session.backendToken}`)
+        const companyStatus = await apiClient.get<{ hasCompany: boolean }>(`${process.env.BACKEND_URL}/company-manager/check-company-status/${session.backendToken}`)
 
-        const teamData = await getCompanyTeamData({ accessToken: session.backendToken!, teamId: TeamId })
-        console.log(teamData)
-        if (!response.data.hasCompany) {
+        console.log(companyStatus)
+
+        if (!companyStatus.data.hasCompany) {
             return <CompanyRequired featureAccess="projects" />
         }
 
+        const teamData = await apiClient.get<{ members: TeamMemberData[] }>(`${process.env.BACKEND_URL}/teams-manager/get-team-data/${session.backendToken}/${TeamId}`)
+        const errorComponent = getErrorComponent(teamData.status, 'teams')
+        if (errorComponent) return errorComponent
+
         return (
             <div>
-                <TeamDetails members={teamData.members} accessToken={session.backendToken!} teamId={TeamId} teamName={teamData.members[0].teamname} />
+                <TeamDetails members={teamData.data.members} accessToken={session.backendToken!} teamId={TeamId} teamName={teamData.data.members[0].teamname} />
             </div>
         )
     } catch (error) {
