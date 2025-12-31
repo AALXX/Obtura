@@ -68,7 +68,7 @@ services:
     container_name: obtura-frontend
     labels:
       - traefik.enable=true
-      - traefik.http.routers.frontend.rule=PathPrefix(\`/\`) && Host(\`localhost\`)
+      - traefik.http.routers.frontend.rule=PathPrefix(`/`) && Host(`localhost`)
       - traefik.http.routers.frontend.entrypoints=web
       - traefik.http.routers.frontend.priority=10
     ports:
