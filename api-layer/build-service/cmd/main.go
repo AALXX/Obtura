@@ -1,33 +1,86 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"build-service/internal/worker"
+	"build-service/pkg"
 
 	"github.com/gin-gonic/gin"
-	"build-service/internal/worker"
 )
 
 func main() {
+	pgHost := pkg.GetEnv("POSTGRESQL_HOST", "localhost")
+	pgPort := pkg.GetEnv("POSTGRESQL_PORT", "5432")
+	pgDatabase := pkg.GetEnv("POSTGRESQL_DATABASE", "obtura_db")
+	pgUser := pkg.GetEnv("POSTGRESQL_USER", "postgres")
+	pgPassword := pkg.GetEnv("POSTGRESQL_PASSWORD", "")
+
+	pgConnStr := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		pgHost, pgPort, pgUser, pgPassword, pgDatabase,
+	)
+
+	db, err := pkg.NewDatabase(pgConnStr)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+	log.Println("✅ Successfully connected to PostgreSQL database")
+
+	rabbitMQURL := pkg.GetEnv("RABBITMQ_URL", "amqp://obtura:obtura123@rabbitmq:5672")
+
 	r := gin.Default()
 
 	r.GET("/health", func(c *gin.Context) {
+		if err := db.Ping(); err != nil {
+			c.JSON(503, gin.H{
+				"status":   "unhealthy",
+				"database": "disconnected",
+				"error":    err.Error(),
+			})
+			return
+		}
+
 		c.JSON(200, gin.H{
-			"message": "ok",
+			"status":   "healthy",
+			"database": "connected",
 		})
 	})
 
-	w, err := worker.NewWorker("amqp://obtura:obtura123@rabbitmq:5672")
+	w, err := worker.NewWorker(rabbitMQURL, db)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to create worker: %v", err)
 	}
+	defer w.Close()
 
 	go func() {
+		log.Println("🚀 Starting RabbitMQ worker...")
 		if err := w.Start(); err != nil {
-			log.Fatalf("worker failed: %v", err)
+			log.Fatalf("Worker failed: %v", err)
 		}
 	}()
 
-	if err := r.Run(":5050"); err != nil {
+	serverPort := pkg.GetEnv("PORT", "5050")
+
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		<-sigChan
+
+		log.Println("🛑 Shutting down gracefully...")
+		w.Close()
+		db.Close()
+		os.Exit(0)
+	}()
+
+	log.Printf("🌐 Starting server on port %s...", serverPort)
+	if err := r.Run(":" + serverPort); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }
+

@@ -13,7 +13,6 @@ import (
 )
 
 func CloneRepository(gitURL string, branch string, path string) error {
-	// Ensure the parent directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("failed to create parent directory: %w", err)
 	}

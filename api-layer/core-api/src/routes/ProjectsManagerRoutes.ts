@@ -5,10 +5,28 @@ import ProjectsServices from '../Services/ProjectServices';
 import { createRBACMiddleware } from '../middlewares/RBACSystem';
 import pool from '../config/postgresql';
 import { PermissionAction, PermissionResource } from '../middlewares/RBACTypes';
+import multer from 'multer';
 
 const router = express.Router();
 
 const rbac = createRBACMiddleware(pool);
+const storage = multer.memoryStorage();
+
+const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (file.originalname === '.env' || file.originalname.startsWith('.env.')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only .env files are allowed'));
+    }
+};
+
+const upload = multer({
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 1024 * 1024 * 10, // 5MB
+    },
+});
 
 router.post(
     '/create-project',
@@ -35,6 +53,7 @@ router.put('/update-project', body('accessToken').not().isEmpty(), body('project
 
 router.delete('/delete-project', body('accessToken').not().isEmpty(), body('projectId').not().isEmpty(), ProjectsServices.RegisterUserWithGoogle);
 
-router.post('/trigger-build', body('projectId').not().isEmpty(), ProjectsServices.TriggerBuild);
+router.post('/env-config', upload.single('envFile'), body('projectId').not().isEmpty(), body('envLocation').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.UploadEnvConfig);
 
+router.post('/trigger-build', body('projectId').not().isEmpty(), body('commitHash').not().isEmpty(), body('branch').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.TriggerBuild);
 export = router;

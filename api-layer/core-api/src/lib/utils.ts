@@ -68,3 +68,22 @@ const mapCountryToRegion = (countryCode: string): string => {
 
     return 'eu-central';
 };
+
+
+export const normalizeServiceName = (path: string): string => {
+    if (path === '.' || path === '') {
+        return 'app';
+    }
+
+    let name = path.replace(/^[./]+|[./]+$/g, '');
+
+    name = name.replace(/[^a-zA-Z0-9-_]+/g, '-');
+
+    name = name.replace(/-+/g, '-');
+
+    name = name.replace(/^-+|-+$/g, '');
+
+    console.log(`Normalizing ${path} to ${name}`);
+
+    return name.toLowerCase();
+};
