@@ -35,9 +35,7 @@ pipeline {
         stage('Generate docker-compose.test.yml') {
             steps {
                 sh '''
-cat > docker-compose.test.yml <<EOF
-version: "3.8"
-
+cat > docker-compose.test.yml <<'EOF'
 networks:
   obtura_dev:
     driver: bridge
@@ -54,7 +52,7 @@ services:
       - --log.level=INFO
     ports:
       - "80:80"
-      - "8080:8080"
+      - "18080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
