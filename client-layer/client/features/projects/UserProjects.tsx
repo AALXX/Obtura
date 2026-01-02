@@ -2,14 +2,14 @@
 import React, { useEffect, useState } from 'react'
 import { Search, Users, Plus } from 'lucide-react'
 import DialogCanvas from '@/common-components/DialogCanvas'
-import { ProjectData } from './Types/ProjectTypes'
+import { ProjectResponse } from './Types/ProjectTypes'
 import AddProjectDialog from './components/AddProjectDialog'
 import { TeamData } from '@/features/teams/types/TeamTypes'
 import axios from 'axios'
 import Link from 'next/link'
 import ProjectCard from './components/ProjectCard'
 
-const UserProjects: React.FC<{ projects: ProjectData[]; accessToken: string }> = props => {
+const UserProjects: React.FC<{ projects: ProjectResponse[]; accessToken: string }> = props => {
     const [searchQuery, setSearchQuery] = useState('')
     const [projects, setProjects] = useState(props.projects)
     const [teams, setTeams] = useState<TeamData[]>([])
@@ -52,7 +52,7 @@ const UserProjects: React.FC<{ projects: ProjectData[]; accessToken: string }> =
                     {projects
                         .filter(project => project.projectName.toLowerCase().includes(searchQuery.toLowerCase()))
                         .map(project => (
-                            <Link href={`/project/${project.id}`} key={project.id}>
+                            <Link href={`/projects/${project.id}`} key={project.id}>
                                 <ProjectCard id={project.id} projectName={project.projectName} slug={project.slug} teamName={project.teamName} createdAt={project.createdAt} memberCount={project.memberCount} />
                             </Link>
                         ))}

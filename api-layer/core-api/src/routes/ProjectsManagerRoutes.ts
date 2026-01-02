@@ -24,7 +24,7 @@ const upload = multer({
     storage: storage,
     fileFilter: fileFilter,
     limits: {
-        fileSize: 1024 * 1024 * 10, // 5MB
+        fileSize: 1024 * 1024 * 10, // 10MB
     },
 });
 
@@ -56,4 +56,9 @@ router.delete('/delete-project', body('accessToken').not().isEmpty(), body('proj
 router.post('/env-config', upload.single('envFile'), body('projectId').not().isEmpty(), body('envLocation').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.UploadEnvConfig);
 
 router.post('/trigger-build', body('projectId').not().isEmpty(), body('commitHash').not().isEmpty(), body('branch').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.TriggerBuild);
+
+router.get('/get-project-details/:projectId/:accessToken', param('projectId').not().isEmpty(), param('accessToken').not().isEmpty(), ProjectsServices.GetProjectDetails);
+
+router.get('/get-project-environment-variables/:projectId/:accessToken', param('projectId').not().isEmpty(), param('accessToken').not().isEmpty(), ProjectsServices.GetEnvConfigs);
+
 export = router;

@@ -213,7 +213,7 @@ const decryptEnvContent = (encryptedContent: string): string => {
     const parts = encryptedContent.split(':');
     const iv = Buffer.from(parts[0], 'hex');
     const encrypted = parts[1];
-    const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+    const decipher = crypto.createDecipheriv(ALGORITHM, KEY, iv); // Use KEY instead
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
@@ -269,22 +269,50 @@ const UploadEnvConfig = async (req: Request, res: Response) => {
 
 const GetEnvConfigs = async (req: Request, res: Response) => {
     try {
-        const { accessToken } = req.body;
         const { projectId } = req.params;
 
-        const userID = await getUserIdFromSessionToken(accessToken);
+        const envConfigs = await db.query('SELECT service_name, env_content, updated_at FROM project_env_configs WHERE project_id = $1 ORDER BY service_name', [projectId]);
 
-        if (!userID) {
-            return res.status(401).json({
-                error: true,
-                errmsg: 'Invalid or expired access token',
-            });
-        }
+        const services = envConfigs.rows.map((row) => {
+            const envVars: Record<string, string> = {};
+            try {
+                const decryptedContent = decryptEnvContent(row.env_content);
 
-        const envConfigs = await db.query('SELECT service_name, updated_at FROM project_env_configs WHERE project_id = $1 ORDER BY service_name', [projectId]);
+                const lines = decryptedContent.split('\n');
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+
+                    if (!trimmedLine || trimmedLine.startsWith('#')) {
+                        continue;
+                    }
+
+                    const equalIndex = trimmedLine.indexOf('=');
+                    if (equalIndex > 0) {
+                        const key = trimmedLine.substring(0, equalIndex).trim();
+                        let value = trimmedLine.substring(equalIndex + 1).trim();
+
+                        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+                            value = value.slice(1, -1);
+                        }
+
+                        envVars[key] = value;
+                    }
+                }
+            } catch (error) {
+                console.error(`Failed to decrypt env for service ${row.service_name}:`, error);
+            }
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+
+            return {
+                service_name: row.service_name,
+                env_vars: envVars,
+                updated_at: row.updated_at,
+            };
+        });
 
         return res.status(200).json({
-            services: envConfigs.rows,
+            services,
         });
     } catch (error) {
         console.error('Get env configs error:', error);
@@ -340,9 +368,220 @@ const TriggerBuild = async (req: Request, res: Response) => {
     }
 };
 
+const GetProjectDetails = async (req: Request, res: Response) => {
+    const errors = CustomRequestValidationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(401).json({ error: true, errors: errors.array() });
+    }
+
+    try {
+        const { projectId } = req.params;
+
+        const query = `
+            WITH latest_deployments AS (
+                SELECT DISTINCT ON (d.project_id, d.deployment_type)
+                    d.id,
+                    d.project_id,
+                    d.deployment_type,
+                    d.commit_hash,
+                    d.branch,
+                    d.status,
+                    d.deployment_url,
+                    d.created_at,
+                    d.completed_at,
+                    d.build_id,
+                    b.build_time_seconds,
+                    b.metadata as build_metadata,
+                    EXTRACT(EPOCH FROM (NOW() - COALESCE(d.completed_at, d.created_at))) as seconds_ago
+                FROM deployments d
+                LEFT JOIN builds b ON b.id = d.build_id
+                WHERE d.status = 'deployed'
+                    AND d.project_id = $1
+                ORDER BY d.project_id, d.deployment_type, d.completed_at DESC NULLS LAST
+            ),
+            preview_deployments AS (
+                SELECT 
+                    d.deployment_url,
+                    d.branch,
+                    d.commit_hash,
+                    d.created_at,
+                    EXTRACT(EPOCH FROM (NOW() - d.created_at)) as seconds_ago
+                FROM deployments d
+                WHERE d.project_id = $1
+                    AND d.deployment_type = 'preview'
+                    AND d.status = 'deployed'
+                ORDER BY d.created_at DESC
+                LIMIT 10
+            ),
+            latest_metrics AS (
+                SELECT 
+                    uptime_percentage,
+                    avg_response_time_ms,
+                    total_requests,
+                    total_errors
+                FROM deployment_metrics
+                WHERE project_id = $1
+                    AND metric_date >= CURRENT_DATE - INTERVAL '1 day'
+                ORDER BY metric_date DESC
+                LIMIT 1
+            ),
+            latest_build AS (
+                SELECT 
+                    b.metadata
+                FROM builds b
+                WHERE b.project_id = $1
+                    AND b.status = 'completed'
+                ORDER BY b.created_at DESC
+                LIMIT 1
+            )
+            SELECT 
+                p.id,
+                p.name,
+                p.slug,
+                t.name as team_name,
+                -- Get all frameworks if monorepo
+                CASE 
+                    WHEN (lb.metadata->>'isMonorepo')::boolean = true THEN
+                        lb.metadata->'frameworks'
+                    ELSE NULL
+                END as frameworks,
+                COALESCE((lb.metadata->>'isMonorepo')::boolean, false) as is_monorepo,
+                CASE 
+                    WHEN p.deleted_at IS NULL THEN 'active'
+                    ELSE 'inactive'
+                END as status,
+                
+                -- Production deployment
+                COALESCE(
+                    json_build_object(
+                        'url', prod.deployment_url,
+                        'status', prod.status,
+                        'lastDeployment', CASE 
+                            WHEN prod.seconds_ago < 3600 THEN CONCAT(FLOOR(prod.seconds_ago / 60), ' minutes ago')
+                            WHEN prod.seconds_ago < 86400 THEN CONCAT(FLOOR(prod.seconds_ago / 3600), ' hours ago')
+                            ELSE CONCAT(FLOOR(prod.seconds_ago / 86400), ' days ago')
+                        END,
+                        'commit', prod.commit_hash,
+                        'branch', prod.branch,
+                        'buildTime', CASE 
+                            WHEN prod.build_time_seconds IS NOT NULL 
+                            THEN CONCAT(FLOOR(prod.build_time_seconds / 60), 'm ', prod.build_time_seconds % 60, 's')
+                            ELSE NULL
+                        END,
+                        'framework', CASE 
+                            WHEN prod.build_metadata->>'frameworks' IS NOT NULL THEN
+                                (prod.build_metadata->'frameworks'->0->>'Name')
+                            ELSE NULL
+                        END
+                    ),
+                    '{}'::json
+                ) as production,
+                
+                -- Staging deployment
+                COALESCE(
+                    json_build_object(
+                        'url', stg.deployment_url,
+                        'status', stg.status,
+                        'lastDeployment', CASE 
+                            WHEN stg.seconds_ago < 3600 THEN CONCAT(FLOOR(stg.seconds_ago / 60), ' minutes ago')
+                            WHEN stg.seconds_ago < 86400 THEN CONCAT(FLOOR(stg.seconds_ago / 3600), ' hours ago')
+                            ELSE CONCAT(FLOOR(stg.seconds_ago / 86400), ' days ago')
+                        END,
+                        'commit', stg.commit_hash,
+                        'branch', stg.branch,
+                        'buildTime', CASE 
+                            WHEN stg.build_time_seconds IS NOT NULL 
+                            THEN CONCAT(FLOOR(stg.build_time_seconds / 60), 'm ', stg.build_time_seconds % 60, 's')
+                            ELSE NULL
+                        END,
+                        'framework', CASE 
+                            WHEN stg.build_metadata->>'frameworks' IS NOT NULL THEN
+                                (stg.build_metadata->'frameworks'->0->>'Name')
+                            ELSE NULL
+                        END
+                    ),
+                    '{}'::json
+                ) as staging,
+                
+                -- Preview deployments
+                COALESCE(
+                    (
+                        SELECT json_agg(
+                            json_build_object(
+                                'url', pd.deployment_url,
+                                'branch', pd.branch,
+                                'commit', pd.commit_hash,
+                                'createdAt', CASE 
+                                    WHEN pd.seconds_ago < 3600 THEN CONCAT(FLOOR(pd.seconds_ago / 60), ' minutes ago')
+                                    WHEN pd.seconds_ago < 86400 THEN CONCAT(FLOOR(pd.seconds_ago / 3600), ' hours ago')
+                                    ELSE CONCAT(FLOOR(pd.seconds_ago / 86400), ' days ago')
+                                END
+                            )
+                        )
+                        FROM preview_deployments pd
+                    ),
+                    '[]'::json
+                ) as preview,
+                
+                -- Metrics
+                json_build_object(
+                    'uptime', CONCAT(COALESCE(m.uptime_percentage, 99.9), '%'),
+                    'avgResponseTime', CONCAT(COALESCE(m.avg_response_time_ms, 0), 'ms'),
+                    'requests24h', COALESCE(m.total_requests, 0)::text,
+                    'errors24h', COALESCE(m.total_errors, 0)::text
+                ) as metrics
+
+            FROM projects p
+            LEFT JOIN teams t ON t.id = p.team_id
+            LEFT JOIN latest_build lb ON true
+            LEFT JOIN latest_deployments prod ON prod.project_id = p.id AND prod.deployment_type = 'production'
+            LEFT JOIN latest_deployments stg ON stg.project_id = p.id AND stg.deployment_type = 'staging'
+            LEFT JOIN latest_metrics m ON true
+            WHERE p.id = $1
+                AND p.deleted_at IS NULL;
+        `;
+
+        const result = await db.query(query, [projectId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                error: true,
+                message: 'Project not found',
+            });
+        }
+
+        const project = result.rows[0];
+
+        res.status(200).json({
+            error: false,
+            project: {
+                id: project.id,
+                name: project.name,
+                slug: project.slug,
+                teamName: project.team_name,
+                framework: project.framework,
+                isMonorepo: project.is_monorepo,
+                frameworks: project.frameworks || null,
+                status: project.status,
+                production: project.production,
+                staging: project.staging,
+                preview: project.preview || [],
+                metrics: project.metrics,
+            },
+        });
+    } catch (error) {
+        console.error('Get project details error:', error);
+        res.status(500).json({
+            error: true,
+            message: 'Failed to fetch project details',
+        });
+    }
+};
+
 export default {
     RegisterUserWithGoogle,
     GetProjects,
+    GetProjectDetails,
     TriggerBuild,
     GetEnvConfigs,
     UploadEnvConfig,

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { X, GitBranch, Globe, Rocket, RefreshCw, AlertCircle, Users } from 'lucide-react'
-import { ProjectData } from '../Types/ProjectTypes'
+import { ProjectResponse } from '../Types/ProjectTypes'
 import axios from 'axios'
 import { TeamData } from '@/features/teams/types/TeamTypes'
 
@@ -8,7 +8,7 @@ interface AddProjectDialogProps {
     closeDialog: () => void
     accessToken: string
     teams: TeamData[]
-    setProjects: React.Dispatch<React.SetStateAction<ProjectData[]>>
+    setProjects: React.Dispatch<React.SetStateAction<ProjectResponse[]>>
 }
 
 interface FormData {
@@ -190,7 +190,7 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ closeDialog, access
                 ...formData
             }
 
-            const response = await axios.post<{ project: ProjectData }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/create-project`, {
+            const response = await axios.post<{ project: ProjectResponse }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/create-project`, {
                 ...projectData,
                 accessToken
             })
@@ -199,8 +199,8 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ closeDialog, access
                 setError('Failed to create project')
                 return
             }
-            const newProject: ProjectData = response.data.project
-            setProjects((prev: ProjectData[]) => {
+            const newProject: ProjectResponse = response.data.project
+            setProjects((prev: ProjectResponse[]) => {
                 const currentProjects = Array.isArray(prev) ? prev : []
                 return [...currentProjects, newProject]
             })

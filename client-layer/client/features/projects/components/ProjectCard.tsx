@@ -1,9 +1,9 @@
 'use client'
 import React from 'react'
 import { Users, Calendar, MoreVertical } from 'lucide-react'
-import { ProjectData } from '../Types/ProjectTypes'
+import { ProjectResponse } from '../Types/ProjectTypes'
 
-const ProjectCard: React.FC<ProjectData> = ({ id, projectName, createdAt, slug, teamName, memberCount }) => {
+const ProjectCard: React.FC<ProjectResponse> = ({ id, projectName, createdAt, slug, teamName, memberCount }) => {
     const formatDate = (dateString: string) => {
         const date = new Date(dateString)
         return date.toLocaleDateString('en-US', {
@@ -18,7 +18,7 @@ const ProjectCard: React.FC<ProjectData> = ({ id, projectName, createdAt, slug, 
             <div className="flex items-start justify-between">
                 <div className="flex-1">
                     <div className="mb-3 flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg text-lg font-semibold text-orange-500 bg-orange-500/10">{projectName.charAt(0).toUpperCase()}</div>
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 text-lg font-semibold text-orange-500">{projectName.charAt(0).toUpperCase()}</div>
                         <div className="flex-1">
                             <h3 className="mb-0.5 text-lg font-semibold text-white">{projectName}</h3>
                             {teamName && <p className="text-xs text-gray-500">{teamName}</p>}

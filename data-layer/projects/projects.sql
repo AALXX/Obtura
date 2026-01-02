@@ -8,11 +8,9 @@ CREATE TABLE
         -- Git info
         git_repo_url TEXT NOT NULL,
         git_branches JSONB,
-
         -- Config
         runtime VARCHAR(50), -- 'nodejs', 'python', 'php'
-        framework VARCHAR(100),
-
+        frameworkData JSONB,
         -- Environment variables (encrypt in app layer)
         env_variables JSONB,
         -- GDPR Essential
@@ -23,34 +21,47 @@ CREATE TABLE
         UNIQUE (team_id, slug)
     );
 
-CREATE TABLE builds (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
-    project_id UUID NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
-    initiated_by_user_id UUID REFERENCES users (id),
-    image_tags JSONB,
-    
-    -- Git info
-    commit_hash VARCHAR(40) NOT NULL,
-    branch VARCHAR(255),
-    -- Status
-    status VARCHAR(50) DEFAULT 'queued',
+create table
+    project_env_configs (
+        id uuid default gen_random_uuid () not null primary key,
+        project_id uuid references projects (id) NOT NULL,
+        service_name varchar(100) not null,
+        env_content text not null,
+        folder_location varchar(100) not null,
+        created_at timestamp default now (),
+        updated_at timestamp default now (),
+        unique (project_id, service_name)
+    );
 
-    metadata JSONB DEFAULT '{}',
-    
-    -- Timestamps
-    created_at TIMESTAMP DEFAULT NOW (),
-    completed_at TIMESTAMP
-)
-
+CREATE TABLE
+    builds (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
+        project_id UUID NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        initiated_by_user_id UUID REFERENCES users (id),
+        image_tags JSONB,
+        -- Git info
+        commit_hash VARCHAR(40) NOT NULL,
+        build_time_seconds INTEGER,
+        error_message TEXT,
+        branch VARCHAR(255),
+        -- Status
+        status VARCHAR(50) DEFAULT 'queued',
+        metadata JSONB DEFAULT '{}',
+        -- Timestamps
+        created_at TIMESTAMP DEFAULT NOW (),
+        completed_at TIMESTAMP
+    )
 CREATE TABLE
     deployments (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
         project_id UUID NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        build_id UUID REFERENCES builds (id) ON DELETE SET NULL,
         -- Git info
         commit_hash VARCHAR(40) NOT NULL,
         branch VARCHAR(255),
         -- Status
         status VARCHAR(50) DEFAULT 'queued',
+        deployment_type VARCHAR(20) DEFAULT 'production'
         -- Who triggered
         triggered_by_user_id UUID REFERENCES users (id),
         -- URLs
@@ -86,3 +97,19 @@ CREATE INDEX idx_audit_logs_created_at ON audit_logs (created_at DESC);
 CREATE INDEX idx_audit_logs_gdpr ON audit_logs (is_gdpr_action)
 WHERE
     is_gdpr_action = true;
+
+CREATE TABLE
+    deployment_metrics (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
+        project_id UUID NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        deployment_id UUID REFERENCES deployments (id) ON DELETE CASCADE,
+        metric_date DATE DEFAULT CURRENT_DATE,
+        uptime_percentage DECIMAL(5, 2),
+        avg_response_time_ms INTEGER,
+        total_requests INTEGER,
+        total_errors INTEGER,
+        created_at TIMESTAMP DEFAULT NOW (),
+        UNIQUE (project_id, deployment_id, metric_date)
+    );
+
+CREATE INDEX idx_metrics_project_date ON deployment_metrics (project_id, metric_date DESC);
