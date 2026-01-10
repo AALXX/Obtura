@@ -61,6 +61,8 @@ router.put('/update-env-config', body('projectId').not().isEmpty(), body('servic
 
 router.post('/trigger-build', body('projectId').not().isEmpty(), body('branch').not(), body('accessToken').not().isEmpty(), ProjectsServices.TriggerBuild);
 
+router.delete('/delete-build/:buildId', body('projectId').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.DeleteBuild);
+
 router.get('/get-project-details/:projectId/:accessToken', param('projectId').not().isEmpty(), param('accessToken').not().isEmpty(), ProjectsServices.GetProjectDetails);
 
 router.get('/get-project-environment-variables/:projectId/:accessToken', param('projectId').not().isEmpty(), param('accessToken').not().isEmpty(), ProjectsServices.GetEnvConfigs);

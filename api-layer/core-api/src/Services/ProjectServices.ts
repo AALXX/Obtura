@@ -571,6 +571,27 @@ const TriggerBuild = async (req: Request, res: Response) => {
     }
 };
 
+const DeleteBuild = async (req: Request, res: Response) => {
+    console.log(req.body)
+
+    const errors = CustomRequestValidationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(401).json({ error: true, errors: errors.array() });
+    }
+
+    try {
+        const { buildId } = req.params;
+
+        console.log(buildId);
+
+        await db.query('DELETE FROM builds WHERE id = $1', [buildId]);
+        res.status(200).json({ success: true, message: 'Build deleted successfully' });
+    } catch (error) {
+        console.error('Delete build error:', error);
+        res.status(500).json({ error: 'Failed to delete build' });
+    }
+};
+
 const GetProjectDetails = async (req: Request, res: Response) => {
     const errors = CustomRequestValidationResult(req);
     if (!errors.isEmpty()) {
@@ -846,6 +867,7 @@ export default {
     GetProjects,
     GetProjectDetails,
     TriggerBuild,
+    DeleteBuild,
     GetEnvConfigs,
     UploadEnvConfig,
     UpdateEnvVariables,

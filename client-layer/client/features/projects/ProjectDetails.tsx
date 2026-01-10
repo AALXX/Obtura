@@ -211,6 +211,28 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         }
     }
 
+    const handleDeleteBuild = async (buildId: string) => {
+        if (!confirm('Are you sure you want to delete this build?')) {
+            return
+        }
+
+        try {
+            const response = await axios.delete(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/delete-build/${buildId}`, {
+                data: {
+                    projectId: projectData.id,
+                    accessToken: accessToken
+                }
+            })
+
+            if (response.status === 200) {
+                setBuilds(prev => prev.filter(build => build.id !== buildId))
+            }
+        } catch (error) {
+            console.error('Error deleting build:', error)
+            alert('Failed to delete build. Please try again.')
+        }
+    }
+
     const handleBuildStatusChange = (buildData: any) => {
         setBuilds(prev =>
             prev.map(build => {
@@ -941,16 +963,21 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                             </div>
                                                         </td>
                                                         <td className="px-6 py-4">
-                                                            <button
-                                                                onClick={() => {
-                                                                    setSelectedBuild(build)
-                                                                    setShowBuildLogs(true)
-                                                                }}
-                                                                className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
-                                                            >
-                                                                <Eye size={14} />
-                                                                View Logs
-                                                            </button>
+                                                            <div className="flex items-center gap-2">
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setSelectedBuild(build)
+                                                                        setShowBuildLogs(true)
+                                                                    }}
+                                                                    className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
+                                                                >
+                                                                    <Eye size={14} />
+                                                                    View Logs
+                                                                </button>
+                                                                <button onClick={() => handleDeleteBuild(build.id)} className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40">
+                                                                    <Trash2 size={14} />
+                                                                </button>
+                                                            </div>
                                                         </td>
                                                     </tr>
                                                 )
