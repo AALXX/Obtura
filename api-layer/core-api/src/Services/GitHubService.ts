@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import pool from '../config/postgresql';
 import redis from '../config/redis';
-import { Request, Response } from 'express';
+import { type Request, type Response } from 'express';
 import { getCompanyIdFromSessionToken } from '../lib/utils';
 import logging from '../config/logging';
 

@@ -9,3 +9,5 @@ docker-compose.dev.yml
 
 /secrets
 /cloudflared
+
+/api-layer/core-api/secrets/

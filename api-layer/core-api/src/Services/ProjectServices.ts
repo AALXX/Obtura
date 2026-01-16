@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { type Request, type  Response } from 'express';
 import logging from '../config/logging';
 import { CustomRequestValidationResult } from '../common/comon';
 import db from '../config/postgresql';
@@ -554,6 +554,7 @@ const TriggerBuild = async (req: Request, res: Response) => {
                     projectId: projectId,
                     commitHash: commitHash,
                     branch: branch,
+                    deploy: false,
                 }),
             ),
             { persistent: true, timestamp: Date.now() },
@@ -571,9 +572,238 @@ const TriggerBuild = async (req: Request, res: Response) => {
     }
 };
 
-const DeleteBuild = async (req: Request, res: Response) => {
-    console.log(req.body)
+const TriggerDeploy = async (req: Request, res: Response) => {
+    const errors = CustomRequestValidationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(401).json({ error: true, errors: errors.array() });
+    }
 
+    try {
+        const { accessToken, projectId, environment = 'production' } = req.body;
+
+        const userID = await getUserIdFromSessionToken(accessToken);
+
+        if (!userID) {
+            return res.status(401).json({
+                error: true,
+                errmsg: 'Invalid or expired access token',
+            });
+        }
+
+        const projectResult = await db.query(
+            `SELECT p.*, gi.installation_id 
+             FROM projects p
+             LEFT JOIN github_installations gi ON gi.installation_id = p.github_installation_id
+             WHERE p.id = $1`,
+            [projectId],
+        );
+
+        if (projectResult.rows.length === 0) {
+            return res.status(404).json({
+                error: true,
+                errmsg: 'Project not found',
+            });
+        }
+
+        const project = projectResult.rows[0];
+
+        const gitBranches = project.git_branches || [];
+        const targetBranch = gitBranches.find((b: any) => b.type === environment);
+
+        if (!targetBranch || !targetBranch.branch) {
+            return res.status(400).json({
+                error: true,
+                errmsg: `No ${environment} branch configured for this project`,
+            });
+        }
+
+        const branch = targetBranch.branch;
+
+        if (!project.installation_id || !project.git_repo_url) {
+            return res.status(400).json({
+                error: true,
+                errmsg: 'GitHub integration not configured for this project',
+            });
+        }
+
+        let commitHash: string;
+        let commitMessage: string;
+        let commitAuthor: string;
+
+        try {
+            const token = await GetInstallationToken(project.installation_id);
+
+            const repoMatch = project.git_repo_url.match(/github\.com[\/:]([^\/]+)\/([^\/\.]+)/);
+
+            if (!repoMatch) {
+                return res.status(400).json({
+                    error: true,
+                    errmsg: 'Invalid GitHub repository URL',
+                });
+            }
+
+            const [, owner, repo] = repoMatch;
+
+            const octokit = new Octokit({ auth: token });
+            const { data } = await octokit.rest.repos.getBranch({
+                owner,
+                repo,
+                branch: branch,
+            });
+
+            commitHash = data.commit.sha;
+            commitMessage = data.commit.commit.message;
+            commitAuthor = data.commit.commit.author?.name || 'Unknown';
+
+            console.log(`Fetched latest commit: ${commitHash} for branch ${branch}`);
+        } catch (githubError: any) {
+            console.error('Error fetching commit from GitHub:', githubError);
+            return res.status(500).json({
+                error: true,
+                errmsg: 'Failed to fetch latest commit from GitHub: ' + githubError.message,
+            });
+        }
+
+        // Start a transaction to ensure both build and deployment are created together
+        const client = await db.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const buildResult = await client.query('INSERT INTO builds (project_id, initiated_by_user_id, commit_hash, branch, status) VALUES ($1, $2, $3, $4, $5) RETURNING id', [projectId, userID, commitHash, branch, 'PENDING']);
+
+            const buildId = buildResult.rows[0].id;
+
+            let domain = null;
+            let subdomain = null;
+
+            if (environment === 'production') {
+                // You might want to fetch this from project settings
+                domain = `${project.slug}.obtura.app`;
+            } else if (environment === 'staging') {
+                subdomain = 'staging';
+                domain = `staging.${project.slug}.obtura.app`;
+            } else if (environment === 'preview') {
+                subdomain = branch.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+                domain = `${subdomain}.preview.${project.slug}.obtura.app`;
+            }
+
+            // Check if approval is required for production deployments
+            const approvalRequired = environment === 'production';
+
+            // Create deployment entry
+            const deploymentResult = await client.query(
+                `INSERT INTO deployments (
+                    project_id, 
+                    build_id, 
+                    environment, 
+                    branch, 
+                    commit_hash, 
+                    commit_message, 
+                    commit_author,
+                    domain,
+                    subdomain,
+                    deployed_by_user_id,
+                    deployment_trigger,
+                    approval_required,
+                    status,
+                    is_ephemeral,
+                    preview_expires_at,
+                    deployment_started_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
+                RETURNING id`,
+                [
+                    projectId,
+                    buildId,
+                    environment,
+                    branch,
+                    commitHash,
+                    commitMessage,
+                    commitAuthor,
+                    domain,
+                    subdomain,
+                    userID,
+                    'manual', // deployment_trigger
+                    approvalRequired,
+                    'pending', // status
+                    environment === 'preview', // is_ephemeral
+                    environment === 'preview' ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null, // preview_expires_at (7 days)
+                    new Date(),
+                ],
+            );
+
+            const deploymentId = deploymentResult.rows[0].id;
+
+            // Create initial deployment event
+            await client.query(
+                `INSERT INTO deployment_events (
+                    deployment_id,
+                    event_type,
+                    event_message,
+                    severity
+                ) VALUES ($1, $2, $3, $4)`,
+                [deploymentId, 'started', `Deployment triggered by user for ${environment} environment`, 'info'],
+            );
+
+            // If approval is required, create approval entry
+            if (approvalRequired) {
+                await client.query(
+                    `INSERT INTO deployment_approvals (
+                        deployment_id,
+                        requested_by_user_id,
+                        status
+                    ) VALUES ($1, $2, $3)`,
+                    [deploymentId, userID, 'pending'],
+                );
+            }
+
+            await client.query('COMMIT');
+
+            // Publish to RabbitMQ
+            await rabbitmq.connect();
+            const channel = await rabbitmq.getChannel();
+
+            await channel.publish(
+                'obtura.builds',
+                'build.triggered',
+                Buffer.from(
+                    JSON.stringify({
+                        buildId: buildId,
+                        deploymentId: deploymentId,
+                        projectId: projectId,
+                        commitHash: commitHash,
+                        branch: branch,
+                        environment: environment,
+                        approvalRequired: approvalRequired,
+                        deploy: true,
+                    }),
+                ),
+                { persistent: true, timestamp: Date.now() },
+            );
+
+            return res.status(200).json({
+                buildId: buildId,
+                deploymentId: deploymentId,
+                commitHash: commitHash,
+                branch: branch,
+                environment: environment,
+                domain: domain,
+                status: approvalRequired ? 'awaiting_approval' : 'queued',
+                approvalRequired: approvalRequired,
+            });
+        } catch (dbError) {
+            await client.query('ROLLBACK');
+            throw dbError;
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('trigger deploy error:', error);
+        res.status(500).json({ error: 'Failed to trigger deployment' });
+    }
+};
+
+const DeleteBuild = async (req: Request, res: Response) => {
     const errors = CustomRequestValidationResult(req);
     if (!errors.isEmpty()) {
         return res.status(401).json({ error: true, errors: errors.array() });
@@ -602,225 +832,226 @@ const GetProjectDetails = async (req: Request, res: Response) => {
         const { projectId } = req.params;
 
         const query = `
-            WITH latest_deployments AS (
-                SELECT DISTINCT ON (d.project_id, d.deployment_type)
-                    d.id,
-                    d.project_id,
-                    d.deployment_type,
-                    d.commit_hash,
-                    d.branch,
-                    d.status,
-                    d.deployment_url,
-                    d.created_at,
-                    d.completed_at,
-                    d.build_id,
-                    b.build_time_seconds,
-                    b.metadata as build_metadata,
-                    EXTRACT(EPOCH FROM (NOW() - COALESCE(d.completed_at, d.created_at))) as seconds_ago
-                FROM deployments d
-                LEFT JOIN builds b ON b.id = d.build_id
-                WHERE d.status = 'deployed'
-                    AND d.project_id = $1
-                ORDER BY d.project_id, d.deployment_type, d.completed_at DESC NULLS LAST
-            ),
-            preview_deployments AS (
-                SELECT 
-                    d.deployment_url,
-                    d.branch,
-                    d.commit_hash,
-                    d.created_at,
-                    EXTRACT(EPOCH FROM (NOW() - d.created_at)) as seconds_ago
-                FROM deployments d
-                WHERE d.project_id = $1
-                    AND d.deployment_type = 'preview'
-                    AND d.status = 'deployed'
-                ORDER BY d.created_at DESC
-                LIMIT 10
-            ),
-            recent_builds AS (
-                SELECT 
-                    b.id,
-                    b.commit_hash,
-                    b.branch,
-                    b.status,
-                    b.build_time_seconds,
-                    b.error_message,
-                    b.created_at,
-                    b.completed_at,
-                    u.name as initiated_by_name,
-                    u.email as initiated_by_email,
-                    EXTRACT(EPOCH FROM (NOW() - b.created_at)) as seconds_ago,
-                    CASE 
-                        WHEN b.metadata->>'frameworks' IS NOT NULL THEN
-                            (b.metadata->'frameworks'->0->>'Name')
-                        ELSE NULL
-                    END as framework
-                FROM builds b
-                LEFT JOIN users u ON u.id = b.initiated_by_user_id
-                WHERE b.project_id = $1
-                ORDER BY b.created_at DESC
-                LIMIT 20
-            ),
-            latest_metrics AS (
-                SELECT 
-                    uptime_percentage,
-                    avg_response_time_ms,
-                    total_requests,
-                    total_errors
-                FROM deployment_metrics
-                WHERE project_id = $1
-                    AND metric_date >= CURRENT_DATE - INTERVAL '1 day'
-                ORDER BY metric_date DESC
-                LIMIT 1
-            ),
-            latest_build AS (
-                SELECT 
-                    b.metadata
-                FROM builds b
-                WHERE b.project_id = $1
-                    AND b.status = 'completed'
-                ORDER BY b.created_at DESC
-                LIMIT 1
-            )
-            SELECT 
-                p.id,
-                p.name,
-                p.slug,
-                p.git_repo_url,
-                t.name as team_name,
-                -- Get all frameworks if monorepo
-                CASE 
-                    WHEN (lb.metadata->>'isMonorepo')::boolean = true THEN
-                        lb.metadata->'frameworks'
-                    ELSE NULL
-                END as frameworks,
-                COALESCE((lb.metadata->>'isMonorepo')::boolean, false) as is_monorepo,
-                CASE 
-                    WHEN p.deleted_at IS NULL THEN 'active'
-                    ELSE 'inactive'
-                END as status,
-                
-                -- Production deployment
-                COALESCE(
-                    json_build_object(
-                        'url', prod.deployment_url,
-                        'status', prod.status,
-                        'lastDeployment', CASE 
-                            WHEN prod.seconds_ago < 3600 THEN CONCAT(FLOOR(prod.seconds_ago / 60), ' minutes ago')
-                            WHEN prod.seconds_ago < 86400 THEN CONCAT(FLOOR(prod.seconds_ago / 3600), ' hours ago')
-                            ELSE CONCAT(FLOOR(prod.seconds_ago / 86400), ' days ago')
-                        END,
-                        'commit', prod.commit_hash,
-                        'branch', prod.branch,
-                        'buildTime', CASE 
-                            WHEN prod.build_time_seconds IS NOT NULL 
-                            THEN CONCAT(FLOOR(prod.build_time_seconds / 60), 'm ', prod.build_time_seconds % 60, 's')
-                            ELSE NULL
-                        END,
-                        'framework', CASE 
-                            WHEN prod.build_metadata->>'frameworks' IS NOT NULL THEN
-                                (prod.build_metadata->'frameworks'->0->>'Name')
-                            ELSE NULL
-                        END
-                    ),
-                    '{}'::json
-                ) as production,
-                
-                -- Staging deployment
-                COALESCE(
-                    json_build_object(
-                        'url', stg.deployment_url,
-                        'status', stg.status,
-                        'lastDeployment', CASE 
-                            WHEN stg.seconds_ago < 3600 THEN CONCAT(FLOOR(stg.seconds_ago / 60), ' minutes ago')
-                            WHEN stg.seconds_ago < 86400 THEN CONCAT(FLOOR(stg.seconds_ago / 3600), ' hours ago')
-                            ELSE CONCAT(FLOOR(stg.seconds_ago / 86400), ' days ago')
-                        END,
-                        'commit', stg.commit_hash,
-                        'branch', stg.branch,
-                        'buildTime', CASE 
-                            WHEN stg.build_time_seconds IS NOT NULL 
-                            THEN CONCAT(FLOOR(stg.build_time_seconds / 60), 'm ', stg.build_time_seconds % 60, 's')
-                            ELSE NULL
-                        END,
-                        'framework', CASE 
-                            WHEN stg.build_metadata->>'frameworks' IS NOT NULL THEN
-                                (stg.build_metadata->'frameworks'->0->>'Name')
-                            ELSE NULL
-                        END
-                    ),
-                    '{}'::json
-                ) as staging,
-                
-                -- Preview deployments
-                COALESCE(
-                    (
-                        SELECT json_agg(
-                            json_build_object(
-                                'url', pd.deployment_url,
-                                'branch', pd.branch,
-                                'commit', pd.commit_hash,
-                                'createdAt', CASE 
-                                    WHEN pd.seconds_ago < 3600 THEN CONCAT(FLOOR(pd.seconds_ago / 60), ' minutes ago')
-                                    WHEN pd.seconds_ago < 86400 THEN CONCAT(FLOOR(pd.seconds_ago / 3600), ' hours ago')
-                                    ELSE CONCAT(FLOOR(pd.seconds_ago / 86400), ' days ago')
-                                END
-                            )
-                        )
-                        FROM preview_deployments pd
-                    ),
-                    '[]'::json
-                ) as preview,
-                
-                -- Builds
-                COALESCE(
-                    (
-                        SELECT json_agg(
-                            json_build_object(
-                                'id', rb.id,
-                                'commit', rb.commit_hash,
-                                'branch', rb.branch,
-                                'status', rb.status,
-                                'buildTime', CASE 
-                                    WHEN rb.build_time_seconds IS NOT NULL 
-                                    THEN CONCAT(FLOOR(rb.build_time_seconds / 60), 'm ', rb.build_time_seconds % 60, 's')
-                                    ELSE NULL
-                                END,
-                                'framework', rb.framework,
-                                'initiatedBy', CASE 
-                                    WHEN rb.initiated_by_name IS NOT NULL 
-                                    THEN rb.initiated_by_name
-                                    ELSE rb.initiated_by_email
-                                END,
-                                'createdAt', CASE 
-                                    WHEN rb.seconds_ago < 3600 THEN CONCAT(FLOOR(rb.seconds_ago / 60), ' minutes ago')
-                                    WHEN rb.seconds_ago < 86400 THEN CONCAT(FLOOR(rb.seconds_ago / 3600), ' hours ago')
-                                    ELSE CONCAT(FLOOR(rb.seconds_ago / 86400), ' days ago')
-                                END,
-                                'errorMessage', rb.error_message
-                            )
-                        )
-                        FROM recent_builds rb
-                    ),
-                    '[]'::json
-                ) as builds,
-                
-                -- Metrics
+       WITH latest_deployments AS (
+    SELECT DISTINCT ON (d.project_id, d.environment)
+        d.id,
+        d.project_id,
+        d.environment,
+        d.commit_hash,
+        d.branch,
+        d.status,
+        -- Construct deployment URL from domain or subdomain
+        COALESCE(d.domain, CONCAT(d.subdomain, '.yourapp.com')) as deployment_url,
+        d.created_at,
+        d.deployment_completed_at as completed_at,
+        d.build_id,
+        b.build_time_seconds,
+        b.metadata as build_metadata,
+        EXTRACT(EPOCH FROM (NOW() - COALESCE(d.deployment_completed_at, d.created_at))) as seconds_ago
+    FROM deployments d
+    LEFT JOIN builds b ON b.id = d.build_id
+    WHERE d.status = 'active'
+        AND d.project_id = $1
+    ORDER BY d.project_id, d.environment, d.deployment_completed_at DESC NULLS LAST
+),
+preview_deployments AS (
+    SELECT 
+        COALESCE(d.domain, CONCAT(d.subdomain, '.yourapp.com')) as deployment_url,
+        d.branch,
+        d.commit_hash,
+        d.created_at,
+        EXTRACT(EPOCH FROM (NOW() - d.created_at)) as seconds_ago
+    FROM deployments d
+    WHERE d.project_id = $1
+        AND d.environment = 'preview'
+        AND d.status = 'active'
+    ORDER BY d.created_at DESC
+    LIMIT 10
+),
+recent_builds AS (
+    SELECT 
+        b.id,
+        b.commit_hash,
+        b.branch,
+        b.status,
+        b.build_time_seconds,
+        b.error_message,
+        b.created_at,
+        b.completed_at,
+        u.name as initiated_by_name,
+        u.email as initiated_by_email,
+        EXTRACT(EPOCH FROM (NOW() - b.created_at)) as seconds_ago,
+        CASE 
+            WHEN b.metadata->>'frameworks' IS NOT NULL THEN
+                (b.metadata->'frameworks'->0->>'Name')
+            ELSE NULL
+        END as framework
+    FROM builds b
+    LEFT JOIN users u ON u.id = b.initiated_by_user_id
+    WHERE b.project_id = $1
+    ORDER BY b.created_at DESC
+    LIMIT 20
+),
+latest_metrics AS (
+    SELECT 
+        uptime_percentage,
+        avg_response_time_ms,
+        total_requests,
+        total_errors
+    FROM deployment_metrics
+    WHERE project_id = $1
+        AND metric_date >= CURRENT_DATE - INTERVAL '1 day'
+    ORDER BY metric_date DESC
+    LIMIT 1
+),
+latest_build AS (
+    SELECT 
+        b.metadata
+    FROM builds b
+    WHERE b.project_id = $1
+        AND b.status = 'completed'
+    ORDER BY b.created_at DESC
+    LIMIT 1
+)
+SELECT 
+    p.id,
+    p.name,
+    p.slug,
+    p.git_repo_url,
+    t.name as team_name,
+    -- Get all frameworks from latest build if monorepo
+    CASE 
+        WHEN (lb.metadata->>'isMonorepo')::boolean = true THEN
+            lb.metadata->'frameworks'
+        ELSE NULL
+    END as frameworks,
+    COALESCE((lb.metadata->>'isMonorepo')::boolean, false) as is_monorepo,
+    CASE 
+        WHEN p.deleted_at IS NULL THEN 'active'
+        ELSE 'inactive'
+    END as status,
+    
+    -- Production deployment
+    COALESCE(
+        json_build_object(
+            'url', prod.deployment_url,
+            'status', prod.status,
+            'lastDeployment', CASE 
+                WHEN prod.seconds_ago < 3600 THEN CONCAT(FLOOR(prod.seconds_ago / 60), ' minutes ago')
+                WHEN prod.seconds_ago < 86400 THEN CONCAT(FLOOR(prod.seconds_ago / 3600), ' hours ago')
+                ELSE CONCAT(FLOOR(prod.seconds_ago / 86400), ' days ago')
+            END,
+            'commit', prod.commit_hash,
+            'branch', prod.branch,
+            'buildTime', CASE 
+                WHEN prod.build_time_seconds IS NOT NULL 
+                THEN CONCAT(FLOOR(prod.build_time_seconds / 60), 'm ', prod.build_time_seconds % 60, 's')
+                ELSE NULL
+            END,
+            'framework', CASE 
+                WHEN prod.build_metadata->>'frameworks' IS NOT NULL THEN
+                    (prod.build_metadata->'frameworks'->0->>'Name')
+                ELSE NULL
+            END
+        ),
+        '{}'::json
+    ) as production,
+    
+    -- Staging deployment
+    COALESCE(
+        json_build_object(
+            'url', stg.deployment_url,
+            'status', stg.status,
+            'lastDeployment', CASE 
+                WHEN stg.seconds_ago < 3600 THEN CONCAT(FLOOR(stg.seconds_ago / 60), ' minutes ago')
+                WHEN stg.seconds_ago < 86400 THEN CONCAT(FLOOR(stg.seconds_ago / 3600), ' hours ago')
+                ELSE CONCAT(FLOOR(stg.seconds_ago / 86400), ' days ago')
+            END,
+            'commit', stg.commit_hash,
+            'branch', stg.branch,
+            'buildTime', CASE 
+                WHEN stg.build_time_seconds IS NOT NULL 
+                THEN CONCAT(FLOOR(stg.build_time_seconds / 60), 'm ', stg.build_time_seconds % 60, 's')
+                ELSE NULL
+            END,
+            'framework', CASE 
+                WHEN stg.build_metadata->>'frameworks' IS NOT NULL THEN
+                    (stg.build_metadata->'frameworks'->0->>'Name')
+                ELSE NULL
+            END
+        ),
+        '{}'::json
+    ) as staging,
+    
+    -- Preview deployments
+    COALESCE(
+        (
+            SELECT json_agg(
                 json_build_object(
-                    'uptime', CONCAT(COALESCE(m.uptime_percentage, 99.9), '%'),
-                    'avgResponseTime', CONCAT(COALESCE(m.avg_response_time_ms, 0), 'ms'),
-                    'requests24h', COALESCE(m.total_requests, 0)::text,
-                    'errors24h', COALESCE(m.total_errors, 0)::text
-                ) as metrics
+                    'url', pd.deployment_url,
+                    'branch', pd.branch,
+                    'commit', pd.commit_hash,
+                    'createdAt', CASE 
+                        WHEN pd.seconds_ago < 3600 THEN CONCAT(FLOOR(pd.seconds_ago / 60), ' minutes ago')
+                        WHEN pd.seconds_ago < 86400 THEN CONCAT(FLOOR(pd.seconds_ago / 3600), ' hours ago')
+                        ELSE CONCAT(FLOOR(pd.seconds_ago / 86400), ' days ago')
+                    END
+                )
+            )
+            FROM preview_deployments pd
+        ),
+        '[]'::json
+    ) as preview,
+    
+    -- Builds
+    COALESCE(
+        (
+            SELECT json_agg(
+                json_build_object(
+                    'id', rb.id,
+                    'commit', rb.commit_hash,
+                    'branch', rb.branch,
+                    'status', rb.status,
+                    'buildTime', CASE 
+                        WHEN rb.build_time_seconds IS NOT NULL 
+                        THEN CONCAT(FLOOR(rb.build_time_seconds / 60), 'm ', rb.build_time_seconds % 60, 's')
+                        ELSE NULL
+                    END,
+                    'framework', rb.framework,
+                    'initiatedBy', CASE 
+                        WHEN rb.initiated_by_name IS NOT NULL 
+                        THEN rb.initiated_by_name
+                        ELSE rb.initiated_by_email
+                    END,
+                    'createdAt', CASE 
+                        WHEN rb.seconds_ago < 3600 THEN CONCAT(FLOOR(rb.seconds_ago / 60), ' minutes ago')
+                        WHEN rb.seconds_ago < 86400 THEN CONCAT(FLOOR(rb.seconds_ago / 3600), ' hours ago')
+                        ELSE CONCAT(FLOOR(rb.seconds_ago / 86400), ' days ago')
+                    END,
+                    'errorMessage', rb.error_message
+                )
+            )
+            FROM recent_builds rb
+        ),
+        '[]'::json
+    ) as builds,
+    
+    -- Metrics
+    json_build_object(
+        'uptime', CONCAT(COALESCE(m.uptime_percentage, 99.9), '%'),
+        'avgResponseTime', CONCAT(COALESCE(m.avg_response_time_ms, 0), 'ms'),
+        'requests24h', COALESCE(m.total_requests, 0)::text,
+        'errors24h', COALESCE(m.total_errors, 0)::text
+    ) as metrics
 
-            FROM projects p
-            LEFT JOIN teams t ON t.id = p.team_id
-            LEFT JOIN latest_build lb ON true
-            LEFT JOIN latest_deployments prod ON prod.project_id = p.id AND prod.deployment_type = 'production'
-            LEFT JOIN latest_deployments stg ON stg.project_id = p.id AND stg.deployment_type = 'staging'
-            LEFT JOIN latest_metrics m ON true
-            WHERE p.id = $1
-                AND p.deleted_at IS NULL;
+FROM projects p
+LEFT JOIN teams t ON t.id = p.team_id
+LEFT JOIN latest_build lb ON true
+LEFT JOIN latest_deployments prod ON prod.project_id = p.id AND prod.environment = 'production'
+LEFT JOIN latest_deployments stg ON stg.project_id = p.id AND stg.environment = 'staging'
+LEFT JOIN latest_metrics m ON true
+WHERE p.id = $1
+    AND p.deleted_at IS NULL;
         `;
 
         const result = await db.query(query, [projectId]);
@@ -867,6 +1098,7 @@ export default {
     GetProjects,
     GetProjectDetails,
     TriggerBuild,
+    TriggerDeploy,
     DeleteBuild,
     GetEnvConfigs,
     UploadEnvConfig,

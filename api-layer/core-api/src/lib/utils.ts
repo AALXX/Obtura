@@ -1,7 +1,7 @@
 import db from '../config/postgresql';
 import bcrypt from 'bcrypt';
-import { Request } from 'express';
-import { lookup } from 'geoip-lite';
+import { type Request } from 'express';
+import gl from 'geoip-lite';
 
 export const formatDate = (date: Date) => {
     return new Date(date).toLocaleDateString('en-US', {
@@ -53,7 +53,7 @@ export const getDataRegion = (req: Request): string => {
         return mapCountryToRegion(countryCode as string);
     }
 
-    const geo = lookup(ip as string);
+    const geo = gl.lookup(ip as string);
 
     if (geo?.country) {
         return mapCountryToRegion(geo.country);

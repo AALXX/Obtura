@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { type Request, type Response } from 'express';
 import logging from '../config/logging';
 import { CustomRequestValidationResult } from '../common/comon';
 import db from '../config/postgresql';

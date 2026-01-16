@@ -3,21 +3,25 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-import { Building2, ArrowRight, Check, AlertCircle } from 'lucide-react'
+import { Building2, ArrowRight, Check, AlertCircle, CreditCard, Lock } from 'lucide-react'
 import { subscriptionPlans } from './types'
 import { TEAM_ROLE_LABELS, TeamRole } from '@/features/teams/types/TeamTypes'
+import PaymentForm from '../components/PaymentForm'
+import { Elements } from '@stripe/react-stripe-js'
+import { loadStripe } from '@stripe/stripe-js'
 
 interface CompanySetupFormProps {
     userEmail: string
     userName: string
-    userId: string
     accessToken: string
 }
 
-const CompanySetupForm: React.FC<CompanySetupFormProps> = ({ userEmail, userName, userId, accessToken }) => {
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
+
+const CompanySetupForm: React.FC<CompanySetupFormProps> = ({ userEmail, userName, accessToken }) => {
     const router = useRouter()
 
-    const [step, setStep] = useState<'company' | 'subscription'>('company')
+    const [step, setStep] = useState<'company' | 'subscription' | 'payment'>('company')
     const [formData, setFormData] = useState({
         companyName: '',
         companySize: '1-10' as '1-10' | '11-50' | '51-200' | '200+',
@@ -33,49 +37,126 @@ const CompanySetupForm: React.FC<CompanySetupFormProps> = ({ userEmail, userName
         dpaSigned: false
     })
 
+    const [companyId, setCompanyId] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState('')
 
-    const handleCompanySubmit = (e: React.FormEvent) => {
+    const handleCompanySubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        setStep('subscription')
+
+        try {
+            const resp = await axios.post<{ success: boolean; company: { id: string } }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/company-manager/company-init`, {
+                companyName: formData.companyName,
+                companySize: formData.companySize,
+                accessToken: accessToken,
+                industry: formData.industry,
+                userRole: formData.role,
+                billingEmail: formData.billingEmail || userEmail,
+                vatNumber: formData.vatNumber,
+                addressLine1: formData.addressLine1,
+                country: formData.country,
+                city: formData.city,
+                dataRegion: formData.dataRegion,
+                dpaSigned: formData.dpaSigned
+            })
+
+            if (resp.status === 200) {
+                setStep('subscription')
+                setCompanyId(resp.data.company.id)
+            }
+        } catch (error) {
+            setError('Failed to setup company')
+        }
     }
 
-    const handleFinalSubmit = async () => {
-        if (!formData.subscriptionPlan) {
-            setError('Please select a subscription plan to continue')
-            return
-        }
-
+    const handleFinalSubmit = async (paymentMethodId: string) => {
         setError('')
         setIsLoading(true)
 
         try {
-            const response = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/account-manager/complete-company-setup`, {
-                userId,
+            const response = await axios.post<{ success: boolean; requiresAction: boolean; clientSecret: string }>(`${process.env.NEXT_PUBLIC_PAYMENT_SERVICE_URL}/payments/create-subscription`, {
+                companyId: companyId,
+                email: formData.billingEmail || userEmail,
+                userName: userName,
                 companyName: formData.companyName,
-                companySize: formData.companySize,
-                industry: formData.industry,
-                userRole: formData.role,
-                subscriptionPlan: formData.subscriptionPlan,
-                billingEmail: formData.billingEmail || userEmail,
+                planId: formData.subscriptionPlan,
+                paymentMethodId: paymentMethodId,
+                address: {
+                    line1: formData.addressLine1,
+                    city: formData.city,
+                    country: formData.country
+                },
                 vatNumber: formData.vatNumber,
-                addressLine1: formData.addressLine1,
-                city: formData.city,
-                country: formData.country,
                 dataRegion: formData.dataRegion,
-                dpaSigned: formData.dpaSigned,
+                userRole: formData.role,
                 accessToken
             })
 
-            if (response.status === 200) {
+            if (response.data.success) {
+                // Check if 3D Secure is required
+                if (response.data.requiresAction && response.data.clientSecret) {
+                    const stripe = await stripePromise
+                    if (!stripe) {
+                        throw new Error('Stripe failed to load')
+                    }
+
+                    // Handle 3D Secure authentication
+                    const { error: confirmError } = await stripe.confirmCardPayment(response.data.clientSecret)
+
+                    if (confirmError) {
+                        setError(confirmError.message || 'Payment authentication failed')
+                        setIsLoading(false)
+                        return
+                    }
+                }
+
+                // Success - redirect to account page
                 router.push('/account')
             }
         } catch (err: any) {
-            setError(err.response?.data?.message || 'Failed to setup company')
+            console.error('Subscription error:', err)
+            setError(err.response?.data?.error || err.response?.data?.details || 'Failed to create subscription')
         } finally {
             setIsLoading(false)
         }
+    }
+
+    const getPlanFeatures = (plan: (typeof subscriptionPlans)[0]) => {
+        const features = []
+
+        if (plan.team.members !== null) {
+            features.push(`Up to ${plan.team.members} team members`)
+        } else {
+            features.push('Unlimited team members')
+        }
+
+        if (plan.buildLimits.concurrentBuilds !== null) {
+            features.push(`${plan.buildLimits.concurrentBuilds} concurrent builds`)
+        } else {
+            features.push('Unlimited concurrent builds')
+        }
+
+        if (plan.deployment.deploymentsPerMonth !== null) {
+            features.push(`${plan.deployment.deploymentsPerMonth} deployments/month`)
+        } else {
+            features.push('Unlimited deployments')
+        }
+
+        features.push(`${plan.storage.totalGb}GB storage`)
+
+        if (plan.traffic.bandwidthGb !== null) {
+            features.push(`${plan.traffic.bandwidthGb}GB bandwidth`)
+        } else {
+            features.push('Unlimited bandwidth')
+        }
+
+        if (plan.features.sso) features.push('SSO enabled')
+        if (plan.features.auditLogs) features.push('Audit logs')
+        if (plan.traffic.cdn) features.push('CDN included')
+
+        features.push(`${plan.support.level} support`)
+
+        return features
     }
 
     if (step === 'company') {
@@ -284,6 +365,94 @@ const CompanySetupForm: React.FC<CompanySetupFormProps> = ({ userEmail, userName
         )
     }
 
+    if (step === 'payment') {
+        const selectedPlan = subscriptionPlans.find(p => p.id === formData.subscriptionPlan)
+
+        return (
+            <div className="flex min-h-screen items-center justify-center px-4 py-12">
+                <div className="w-full max-w-5xl">
+                    <div className="mb-6 text-center">
+                        <h1 className="mb-2 text-2xl font-bold text-white lg:text-3xl">Finalize Your Subscription</h1>
+                        <p className="text-sm text-gray-400">Complete payment to activate your enterprise account</p>
+                    </div>
+
+                    <div className="grid gap-6 lg:grid-cols-3">
+                        {/* Left: Order Summary */}
+                        <div className="space-y-4 lg:col-span-1">
+                            <div className="rounded-lg border border-neutral-800 bg-[#1b1b1b] p-5">
+                                <p className="mb-1 text-xs font-medium tracking-wide text-gray-500 uppercase">Selected Plan</p>
+                                <h3 className="mb-3 text-xl font-bold text-white">{selectedPlan?.name}</h3>
+
+                                <div className="mb-3 flex items-baseline gap-2">
+                                    <span className="text-3xl font-bold text-white">€{selectedPlan?.price}</span>
+                                    <span className="text-sm text-gray-400">/month</span>
+                                </div>
+
+                                <div className="space-y-2 border-t border-neutral-800 pt-3">
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-400">Company</span>
+                                        <span className="font-medium text-white">{formData.companyName}</span>
+                                    </div>
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-400">Billing Email</span>
+                                        <span className="truncate pl-2 text-white">{formData.billingEmail || userEmail}</span>
+                                    </div>
+                                    {formData.vatNumber && (
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-400">VAT Number</span>
+                                            <span className="text-white">{formData.vatNumber}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg border border-green-900/30 bg-green-950/20 p-3">
+                                <div className="flex items-center gap-2">
+                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-500/20">
+                                        <Lock className="h-4 w-4 text-green-500" />
+                                    </div>
+                                    <div>
+                                        <p className="text-xs font-medium text-green-400">PCI-DSS Compliant</p>
+                                        <p className="text-xs text-green-600">256-bit encryption</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right: Payment Form */}
+                        <div className="lg:col-span-2">
+                            <div className="rounded-lg border border-neutral-800 bg-[#1b1b1b] p-6 lg:p-8">
+                                <div className="mb-6 flex items-center justify-between">
+                                    <h2 className="text-xl font-semibold text-white">Payment Method</h2>
+                                    <div className="flex items-center gap-2">
+                                        <CreditCard className="h-5 w-5 text-gray-400" />
+                                        <span className="text-sm text-gray-400">Credit Card</span>
+                                    </div>
+                                </div>
+
+                                <div className="mx-auto max-w-md">
+                                    <Elements stripe={stripePromise}>
+                                        <PaymentForm onBack={() => setStep('subscription')} handleFinalSubmit={handleFinalSubmit} isLoading={isLoading} setIsLoading={setIsLoading} error={error} setError={setError} />
+                                    </Elements>
+                                </div>
+
+                                <div className="mt-8 flex flex-wrap items-center justify-center gap-3 border-t border-neutral-800 pt-6 text-xs text-gray-500">
+                                    <span>Powered by Stripe</span>
+                                    <span>•</span>
+                                    <span>SOC 2 Certified</span>
+                                    <span>•</span>
+                                    <span>GDPR Compliant</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p className="mt-6 text-center text-xs text-gray-500">By completing this purchase, you agree to our Terms of Service and Privacy Policy</p>
+                </div>
+            </div>
+        )
+    }
+
     return (
         <div className="flex min-h-screen items-center justify-center px-4 py-8">
             <div className="w-full max-w-6xl">
@@ -296,6 +465,7 @@ const CompanySetupForm: React.FC<CompanySetupFormProps> = ({ userEmail, userName
                     {subscriptionPlans.map(plan => {
                         const Icon = plan.icon
                         const isSelected = formData.subscriptionPlan === plan.id
+                        const features = getPlanFeatures(plan)
 
                         return (
                             <div key={plan.id} onClick={() => setFormData({ ...formData, subscriptionPlan: plan.id })} className={`relative cursor-pointer rounded-lg border p-6 transition-all ${isSelected ? 'border-orange-500 bg-orange-500/10' : 'border-neutral-800 bg-[#1b1b1b] hover:border-neutral-700'}`}>
@@ -318,7 +488,7 @@ const CompanySetupForm: React.FC<CompanySetupFormProps> = ({ userEmail, userName
                                 <p className="mb-4 text-sm text-gray-400">{plan.description}</p>
 
                                 <ul className="space-y-2">
-                                    {plan.features.map((feature, index) => (
+                                    {features.map((feature, index) => (
                                         <li key={index} className="flex items-start gap-2 text-sm text-gray-300">
                                             <Check className="mt-0.5 h-4 w-4 shrink-0 text-orange-500" />
                                             <span>{feature}</span>
@@ -345,8 +515,18 @@ const CompanySetupForm: React.FC<CompanySetupFormProps> = ({ userEmail, userName
                     <button onClick={() => setStep('company')} disabled={isLoading} className="rounded border border-neutral-800 bg-[#1b1b1b] px-6 py-3 font-medium text-white transition-colors hover:bg-neutral-900 disabled:opacity-50">
                         Back
                     </button>
-                    <button onClick={handleFinalSubmit} disabled={isLoading || !formData.subscriptionPlan} className="flex cursor-pointer items-center gap-2 rounded bg-white px-6 py-3 font-medium text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50">
-                        {isLoading ? 'Setting up...' : 'Complete Setup'}
+                    <button
+                        onClick={() => {
+                            if (!formData.subscriptionPlan) {
+                                setError('Please select a subscription plan to continue')
+                                return
+                            }
+                            setStep('payment')
+                        }}
+                        disabled={isLoading || !formData.subscriptionPlan}
+                        className="flex cursor-pointer items-center gap-2 rounded bg-white px-6 py-3 font-medium text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Continue to Payment
                         <ArrowRight className="h-4 w-4" />
                     </button>
                 </div>

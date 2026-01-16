@@ -1,5 +1,5 @@
 import { auth } from '@/features/account/auth/auth'
-import { redirect    } from 'next/navigation'
+import { redirect } from 'next/navigation'
 import CompanySetupForm from '@/features/account/onboarding/CompanySetupForm'
 import AuthRequired from '@/common-components/AuthRequredForm'
 import { apiClient } from '@/lib/utils'
@@ -17,7 +17,7 @@ const OnboardingPage = async () => {
         redirect('/account')
     }
 
-    return <CompanySetupForm userEmail={session.user.email!} userName={session.user.name!} userId={session.userId!} accessToken={session.backendToken!} />
+    return <CompanySetupForm userEmail={session.user.email!} userName={session.user.name!} accessToken={session.backendToken!} />
 }
 
 export default OnboardingPage

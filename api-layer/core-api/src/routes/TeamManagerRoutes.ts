@@ -22,15 +22,7 @@ router.post(
 
 router.get('/get-teams/:accessToken', param('accessToken').notEmpty().isString(), rbac.authenticate, TeamServices.GetTeams);
 
-router.get(
-    '/get-team-data/:accessToken/:teamId',
-    param('accessToken').notEmpty().isString(),
-    param('teamId').notEmpty().isString(),
-    rbac.authenticate,
-    rbac.loadCompanyEmployee,
-    rbac.requirePermission(PermissionResource.TEAM, PermissionAction.READ),
-    TeamServices.GetTeamData,
-);
+router.get('/get-team-data/:accessToken/:teamId', param('accessToken').notEmpty().isString(), param('teamId').notEmpty().isString(), rbac.authenticate, rbac.loadCompanyEmployee, rbac.requirePermission(PermissionResource.TEAM, PermissionAction.READ), TeamServices.GetTeamData);
 
 router.put(
     '/update-team',
@@ -44,15 +36,7 @@ router.put(
     TeamServices.UpdateTeam,
 );
 
-router.delete(
-    '/delete-team',
-    body('accessToken').notEmpty().isString(),
-    body('teamId').notEmpty().isString(),
-    rbac.authenticate,
-    rbac.loadCompanyEmployee,
-    rbac.requirePermission(PermissionResource.TEAM, PermissionAction.DELETE),
-    TeamServices.DeleteTeam,
-);
+router.delete('/delete-team', body('accessToken').notEmpty().isString(), body('teamId').notEmpty().isString(), rbac.authenticate, rbac.loadCompanyEmployee, rbac.requirePermission(PermissionResource.TEAM, PermissionAction.DELETE), TeamServices.DeleteTeam);
 
 router.post(
     '/add-team-members',
@@ -90,4 +74,4 @@ router.delete(
     TeamServices.RemoveMember,
 );
 
-export = router;
+export default router;

@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { type Request, type Response } from 'express';
 import logging from '../config/logging';
 import { CustomRequestValidationResult } from '../common/comon';
 import db from '../config/postgresql';
@@ -6,23 +6,23 @@ import { getCompanyInvitationEmailTemplate } from '../config/HTML_email_Template
 import nodemailer from 'nodemailer';
 import jwt from 'jsonwebtoken';
 
-const CompleteCompanySetup = async (req: Request, res: Response) => {
+const CompanyInit = async (req: Request, res: Response) => {
     const errors = CustomRequestValidationResult(req);
     if (!errors.isEmpty()) {
         errors.array().map((error) => {
-            logging.error('COMPLETE-COMPANY-SETUP', error.errorMsg);
+            logging.error('COMPANY-INIT', error.errorMsg);
         });
-
         return res.status(400).json({ error: true, errors: errors.array() });
     }
 
-    const { companyName, companySize, accessToken, industry, userRole, subscriptionPlan, billingEmail, vatNumber, addressLine1, city, country, dataRegion, dpaSigned } = req.body;
-    const dbClient = await db.connect();
+    const { companyName, companySize, accessToken, industry, userRole, billingEmail, vatNumber, addressLine1, city, country, dataRegion, dpaSigned } = req.body;
 
+    const dbClient = await db.connect();
 
     try {
         await dbClient.query('BEGIN');
 
+        // Validate session
         const sessionResult = await dbClient.query('SELECT user_id FROM sessions WHERE access_token = $1 AND expires_at > NOW()', [accessToken]);
 
         if (sessionResult.rows.length === 0) {
@@ -32,54 +32,35 @@ const CompleteCompanySetup = async (req: Request, res: Response) => {
 
         const userId = sessionResult.rows[0].user_id;
 
-        const existingCompany = await dbClient.query(
-            `
-            SELECT c.id 
-            FROM companies c
-            WHERE c.owner_user_id = $1
-            LIMIT 1
-            `,
-            [userId],
-        );
+        // Check if user already has a company (including pending ones)
+        const existingCompany = await dbClient.query('SELECT c.id, c.status FROM companies c WHERE c.owner_user_id = $1 LIMIT 1', [userId]);
 
         if (existingCompany.rows.length > 0) {
-            await dbClient.query('ROLLBACK');
-            return res.status(400).json({
-                error: true,
-                message: 'User already has a company',
-            });
+            const existingStatus = existingCompany.rows[0].status;
+
+            // If there's a pending company, allow overwriting (in case of retry)
+            if (existingStatus === 'pending') {
+                await dbClient.query('DELETE FROM companies WHERE id = $1', [existingCompany.rows[0].id]);
+            } else {
+                await dbClient.query('ROLLBACK');
+                return res.status(400).json({
+                    error: true,
+                    message: 'User already has an active company',
+                });
+            }
         }
 
-        const validPlans = ['starter', 'professional', 'business', 'enterprise'];
-        const selectedPlan = subscriptionPlan || 'starter';
-
-        if (!validPlans.includes(selectedPlan)) {
-            await dbClient.query('ROLLBACK');
-            return res.status(400).json({
-                error: true,
-                message: 'Invalid subscription plan selected',
-            });
-        }
-
-        const planResult = await dbClient.query('SELECT id, name, price_monthly FROM subscription_plans WHERE id = $1', [selectedPlan]);
-
-        if (planResult.rows.length === 0) {
-            await dbClient.query('ROLLBACK');
-            return res.status(400).json({
-                error: true,
-                message: 'Selected subscription plan not found',
-            });
-        }
-
-        const planDetails = planResult.rows[0];
-
-        const userResult = await dbClient.query('SELECT email FROM users WHERE id = $1', [userId]);
+        // Get user details
+        const userResult = await dbClient.query('SELECT email, name FROM users WHERE id = $1', [userId]);
 
         if (userResult.rows.length === 0) {
             await dbClient.query('ROLLBACK');
             return res.status(404).json({ error: 'User not found' });
         }
 
+        const userEmail = userResult.rows[0].email;
+
+        // Generate unique company slug
         const baseSlug = companyName
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '-')
@@ -87,159 +68,94 @@ const CompleteCompanySetup = async (req: Request, res: Response) => {
         const randomSuffix = Math.random().toString(36).substr(2, 6);
         const companySlug = `${baseSlug}-${randomSuffix}`;
 
+        // Create company with PENDING status
         const companyResult = await dbClient.query(
-            `
-            INSERT INTO companies (
-                owner_user_id,
-                name,
-                slug,
-                data_region,
-                is_active,
-                billing_email,
-                vat_number,
-                address_line1,
+            `INSERT INTO companies (
+                owner_user_id, 
+                name, 
+                slug, 
+                data_region, 
+                billing_email, 
+                vat_number, 
+                address_line1, 
+                city, 
+                country, 
+                dpa_signed,
+                status,
+                metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11)
+            RETURNING id, name, slug, status`,
+            [
+                userId,
+                companyName,
+                companySlug,
+                dataRegion,
+                billingEmail || userEmail,
+                vatNumber,
+                addressLine1,
                 city,
                 country,
-                dpa_signed
-            )
-            VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10)
-            RETURNING id, name, slug
-            `,
-            [userId, companyName, companySlug, dataRegion, billingEmail, vatNumber, addressLine1, city, country, dpaSigned],
+                dpaSigned,
+                JSON.stringify({
+                    company_size: companySize,
+                    industry: industry || null,
+                    user_role: userRole,
+                    onboarding_step: 'payment_pending',
+                }),
+            ],
         );
 
         const company = companyResult.rows[0];
 
-        const teamResult = await dbClient.query(
-            `
-            INSERT INTO teams (
-                company_id,
-                owner_user_id,
-                name,
-                slug,
-                data_region,
-                is_active
+        // Create default team (also pending)
+        // const teamResult = await dbClient.query(
+        //     `INSERT INTO teams (company_id, owner_user_id, name, slug, data_region, is_active)
+        //     VALUES ($1, $2, 'Default Team', 'default', $3, false)
+        //     RETURNING id`,
+        //     [company.id, userId, dataRegion],
+        // );
+
+        // const teamId = teamResult.rows[0].id;
+
+        // // Add user to team (pending)
+        // await dbClient.query('INSERT INTO team_members (team_id, user_id) VALUES ($1, $2)', [teamId, userId]);
+
+        // // Add user to company_users with role (pending)
+        // await dbClient.query(
+        //     `INSERT INTO company_users (company_id, user_id, role)
+        //     VALUES ($1, $2, (SELECT id FROM roles WHERE name = $3))`,
+        //     [company.id, userId, userRole],
+        // );
+
+        // Log audit entry
+        await dbClient.query(
+            `INSERT INTO audit_logs (
+                user_id,  action, resource_type, 
+                resource_id, ip_address, user_agent
             )
-            VALUES ($1, $2, 'Default Team', 'default', $3, true)
-            RETURNING id
-            `,
-            [company.id, userId, dataRegion],
-        );
-
-        const teamId = teamResult.rows[0].id;
-
-        await dbClient.query(
-            `
-            INSERT INTO team_members (team_id, user_id)
-            VALUES ($1, $2)
-            `,
-            [teamId, userId],
-        );
-
-        const periodEnd = new Date();
-        periodEnd.setMonth(periodEnd.getMonth() + 1);
-
-        await dbClient.query(
-            `
-    INSERT INTO subscriptions (
-        company_id,
-        plan_id,
-        status,
-        current_period_start,
-        current_period_end,
-        current_users_count,
-        current_projects_count,
-        current_deployments_count,
-        current_storage_used_gb
-    )
-    VALUES ($1, $2, 'active', NOW(), $3, 1, 0, 0, 0)
-    `,
-            [company.id, selectedPlan, periodEnd],
-        );
-
-        await dbClient.query(
-            `
-            INSERT INTO company_users (
-                company_id,
-                user_id,
-                role
-            )
-            VALUES ($1, $2, (SELECT id FROM roles WHERE name = $3))
-            `,
-            [company.id, userId, userRole],
-        );
-
-        const subscriptionResult = await dbClient.query('SELECT id FROM subscriptions WHERE company_id = $1 ORDER BY created_at DESC LIMIT 1', [company.id]);
-
-        if (subscriptionResult.rows.length > 0) {
-            await dbClient.query(
-                `
-                INSERT INTO subscription_history (
-                    subscription_id, 
-                    plan_id, 
-                    status, 
-                    change_type, 
-                    changed_by, 
-                    notes
-                )
-                VALUES ($1, $2, 'trialing', 'created', $3, $4)
-                `,
-                [subscriptionResult.rows[0].id, selectedPlan, userId, `Trial subscription created during onboarding. Selected plan: ${planDetails.name} ($${planDetails.price_monthly}/month)`],
-            );
-        }
-
-        await dbClient.query(
-            `
-  UPDATE companies 
-  SET metadata = jsonb_build_object(
-      'company_size', $1::text,
-      'industry', $2::text,
-      'onboarding_completed_at', NOW()
-  )
-  WHERE id = $3
-  `,
-            [companySize, industry, company.id],
-        );
-
-        await dbClient.query(
-            `
-            INSERT INTO audit_logs (
-                user_id,
-                team_id,
-                action,
-                resource_type,
-                resource_id,
-                ip_address,
-                user_agent
-            )
-            VALUES ($1, $2, 'company.created', 'company', $3, $4, $5)
-            `,
-            [userId, teamId, company.id, req.ip, req.headers['user-agent']],
+            VALUES ($1, 'company.init_pending', 'company', $2, $3, $4)`,
+            [userId, company.id, req.ip, req.headers['user-agent']],
         );
 
         await dbClient.query('COMMIT');
+
 
         res.status(200).json({
             success: true,
             company: {
                 id: company.id,
-                name: company.name,
                 slug: company.slug,
+                status: company.status,
             },
-            subscription: {
-                plan: selectedPlan,
-                planName: planDetails.name,
-                priceMonthly: planDetails.price_monthly,
-                status: 'trialing',
-            },
-            message: 'Company setup completed successfully',
+            message: 'Company initialized. Proceed to payment.',
         });
     } catch (error: any) {
         await dbClient.query('ROLLBACK');
-        logging.error('COMPLETE-COMPANY-SETUP', error.message);
+        logging.error('COMPANY-INIT', error.message);
         res.status(500).json({
             error: true,
-            message: 'Failed to setup company',
+            message: 'Failed to initialize company',
             details: error.message,
         });
     } finally {
@@ -421,10 +337,12 @@ const InviteUser = async (req: Request, res: Response) => {
                 { expiresIn: '7d' },
             );
             const insertPromises = invitations.map((invitation: { email: string; role: string }) =>
-                db.query(
-                    'INSERT INTO company_invitations (company_id, email, role_id, invited_by, created_at) VALUES ($1, $2, (SELECT id FROM roles WHERE name = $3), (SELECT user_id FROM sessions WHERE access_token = $4), NOW())',
-                    [companyid, invitation.email, invitation.role, req.body.accessToken],
-                ),
+                db.query('INSERT INTO company_invitations (company_id, email, role_id, invited_by, created_at) VALUES ($1, $2, (SELECT id FROM roles WHERE name = $3), (SELECT user_id FROM sessions WHERE access_token = $4), NOW())', [
+                    companyid,
+                    invitation.email,
+                    invitation.role,
+                    req.body.accessToken,
+                ]),
             );
             await Promise.all(insertPromises);
 
@@ -563,7 +481,7 @@ const SearchUsers = async (req: Request, res: Response) => {
             `,
             [req.params.accessToken, `%${req.params.searchTerm}%`],
         );
-
+        console.log(users.rows);
         res.status(200).json({
             success: true,
             usersData: users.rows,
@@ -574,4 +492,4 @@ const SearchUsers = async (req: Request, res: Response) => {
     }
 };
 
-export default { CompleteCompanySetup, CheckCompanyStatus, GetEmployees, InviteUser, AcceptInvitation, SearchUsers };
+export default { CompanyInit, CheckCompanyStatus, GetEmployees, InviteUser, AcceptInvitation, SearchUsers };

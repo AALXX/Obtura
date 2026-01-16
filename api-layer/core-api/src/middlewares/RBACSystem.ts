@@ -1,5 +1,5 @@
 // RBACMiddleware.ts
-import { Request, Response, NextFunction } from 'express';
+import { type Request, type Response, type NextFunction } from 'express';
 import { Pool } from 'pg';
 import { PermissionResource, PermissionAction, TeamRole } from './RBACTypes';
 
@@ -41,7 +41,6 @@ export const createRBACMiddleware = (pool: Pool) => {
                 WHERE s.access_token = $1 AND s.expires_at > NOW() AND u.status = 'active'`,
                 [accessToken],
             );
-
 
             if (result.rows.length === 0) {
                 return res.status(401).json({ message: 'Invalid or expired token' });

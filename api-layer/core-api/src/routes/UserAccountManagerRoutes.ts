@@ -31,4 +31,4 @@ router.delete('/delete-user-account', body('accessToken').not().isEmpty(), UserA
 // TODO IMPLEMENT IT IF NECESSARY
 // router.post('/change-user-icon', UserAccountServices.ChangeUserIcon);
 
-export = router;
+export default router;

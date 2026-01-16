@@ -305,7 +305,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                 Build
                             </button>
 
-                            <button onClick={() => handleDeploy('production')} disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-50">
+                            <button onClick={() => handleDeploy('production')} disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-50 cursor-pointer">
                                 {isDeploying ? (
                                     <>
                                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />

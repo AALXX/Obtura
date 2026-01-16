@@ -23,7 +23,6 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, a
         accessToken: accessToken
     })
 
-
     const [notifications, setNotifications] = useState({
         emailNotifications: true,
         pushNotifications: false,

@@ -16,7 +16,6 @@ const Account = async () => {
         const resp = await apiClient.get<UserResponse>(`${process.env.BACKEND_URL}/account-manager/get-account-data/${session.backendToken}`)
         const errorComponent = getErrorComponent(resp.status, 'account')
         if (errorComponent) return errorComponent
-
         return (
             <div>
                 <UserAccount
@@ -30,6 +29,7 @@ const Account = async () => {
                     companyName={resp.data.companyName}
                     companyRole={resp.data.companyRole}
                     userImg={session.user.image}
+                    hasCompany={resp.data.hasCompany}
                 />
             </div>
         )

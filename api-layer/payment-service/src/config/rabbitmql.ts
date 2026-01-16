@@ -1,4 +1,4 @@
-import amqp, { type Connection, type Channel, type Options } from 'amqplib';
+import amqp, { Connection, Channel, Options } from 'amqplib';
 
 interface RabbitMQConfig {
     protocol: string;

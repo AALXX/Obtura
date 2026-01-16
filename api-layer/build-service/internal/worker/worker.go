@@ -231,10 +231,12 @@ func (w *Worker) writeEnvFiles(
 
 func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 	var job struct {
-		GitURL    string `json:"git_repo_url"`
-		BuildID   string `json:"buildId"`
-		ProjectID string `json:"projectId"`
-		Branch    string `json:"branch"`
+		GitURL       string  `json:"git_repo_url"`
+		BuildID      string  `json:"buildId"`
+		DeploymentID *string `json:"deploymentId,omitempty"`
+		ProjectID    string  `json:"projectId"`
+		Branch       string  `json:"branch"`
+		Deploy       *bool   `json:"deploy,omitempty"`
 	}
 	ctx := context.Background()
 
@@ -524,7 +526,7 @@ LIMIT 1;
 			log.Printf("❌ Failed to generate docker-compose.yml: %v", err)
 			w.streamLog(job.BuildID, fmt.Sprintf("Failed to generate docker-compose.yml: %v", err))
 			w.streamStatus(job.BuildID, "failed", "Failed to generate docker-compose.yml")
-				buildTimeSeconds := int(time.Since(buildStartTime).Seconds())
+			buildTimeSeconds := int(time.Since(buildStartTime).Seconds())
 
 			w.db.ExecContext(ctx, "UPDATE builds SET status = 'failed', error_message = $1 WHERE id = $2, build_time_seconds = $3", err.Error(), job.BuildID, buildTimeSeconds)
 			msg.Nack(false, false)
@@ -696,10 +698,31 @@ LIMIT 1;
 	w.streamLog(job.BuildID, fmt.Sprintf("✅ Build completed successfully with %d service(s) in %dm %ds",
 		len(result.Frameworks), buildTimeSeconds/60, buildTimeSeconds%60))
 
+	if job.Deploy != nil && *job.Deploy {
+		fmt.Println("Deploy is enabled")
+		
+		// send msg to deploy queue
+		err := w.channel.Publish(
+			"obtura.deploys",
+			"deploy.triggered",
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "text/plain",
+				Body:        []byte(job.BuildID),
+			},
+		)
+		if err != nil {
+			log.Printf("❌ Failed to publish deploy message: %v", err)
+		}
+
+	}
+	
 	w.streamStatus(job.BuildID, "completed", "Build completed successfully")
 
 	if logBroker := logger.GetLogBroker(); logBroker != nil {
 		logBroker.PublishBuildComplete(job.BuildID, "completed")
+
 	}
 
 	msg.Ack(false)

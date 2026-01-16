@@ -17,8 +17,8 @@ CREATE TABLE companies (
     
     metadata JSONB DEFAULT '{}',
     
-    is_active BOOLEAN DEFAULT true,
-    
+    status VARCHAR(50) DEFAULT 'active', -- 'pending', 'active', 'suspended', 'deleted'
+
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );

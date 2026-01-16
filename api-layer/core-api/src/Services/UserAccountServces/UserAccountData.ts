@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { type Request, type Response } from 'express';
 import logging from '../../config/logging';
 import { CustomRequestValidationResult } from '../../common/comon';
 import db from '../../config/postgresql';
@@ -63,7 +63,7 @@ SELECT
                 'display_name', r.display_name,
                 'hierarchy_level', r.hierarchy_level
             ),
-            'is_active', c.is_active
+            'status', c.status
         )
         FROM companies c
         JOIN company_users cu
@@ -77,26 +77,137 @@ SELECT
 
     (
         SELECT jsonb_build_object(
+            -- Basic Info
             'id', sub.id,
             'status', sub.status,
+            'billing_cycle', sub.billing_cycle,
+            
+            -- Billing Period
             'current_period_start', sub.current_period_start,
             'current_period_end', sub.current_period_end,
             'cancel_at_period_end', sub.cancel_at_period_end,
+            'canceled_at', sub.canceled_at,
+            
+            -- Payment Info
+            'last_payment_at', sub.last_payment_at,
+            'next_payment_at', sub.next_payment_at,
+            
+            -- Current Usage - Team & Organization
             'current_users_count', sub.current_users_count,
+            'current_team_members_count', sub.current_team_members_count,
             'current_projects_count', sub.current_projects_count,
+            
+            -- Current Usage - Builds
+            'current_builds_this_hour', sub.current_builds_this_hour,
+            'current_builds_today', sub.current_builds_today,
+            'current_builds_this_month', sub.current_builds_this_month,
+            'current_concurrent_builds', sub.current_concurrent_builds,
+            
+            -- Current Usage - Deployments
             'current_deployments_count', sub.current_deployments_count,
+            'current_deployments_this_month', sub.current_deployments_this_month,
+            'current_concurrent_deployments', sub.current_concurrent_deployments,
+            'current_environments_count', sub.current_environments_count,
+            'current_preview_environments_count', sub.current_preview_environments_count,
+            
+            -- Current Usage - Storage
             'current_storage_used_gb', sub.current_storage_used_gb,
-            'trial_end', sub.trial_end,
+            'current_build_artifacts_gb', sub.current_build_artifacts_gb,
+            'current_database_storage_gb', sub.current_database_storage_gb,
+            
+            -- Current Usage - Traffic & Bandwidth
+            'current_bandwidth_used_gb', sub.current_bandwidth_used_gb,
+            'bandwidth_reset_at', sub.bandwidth_reset_at,
+            
+            -- Current Usage - Integrations
+            'current_webhooks_count', sub.current_webhooks_count,
+            'current_api_keys_count', sub.current_api_keys_count,
+            'current_custom_domains_count', sub.current_custom_domains_count,
+            
+            -- Overage & Limits
+            'overage_charges', sub.overage_charges,
+            'overage_details', sub.overage_details,
+            
+            -- Plan Modifications
+            'pending_plan_change_id', sub.pending_plan_change_id,
+            'pending_change_at', sub.pending_change_at,
+            'previous_plan_id', sub.previous_plan_id,
+            'plan_changed_at', sub.plan_changed_at,
+            
+            -- Additional Metadata
+            'metadata', sub.metadata,
+            'custom_limits', sub.custom_limits,
+            'feature_flags', sub.feature_flags,
+            
+            -- Subscription Plan Details
             'plan', jsonb_build_object(
+                -- Basic Info
                 'id', sp.id,
                 'name', sp.name,
                 'price_monthly', sp.price_monthly,
+                'price_annually', sp.price_annually,
+                'description', sp.description,
+                'display_order', sp.display_order,
+                
+                -- Team & Organization Limits
                 'max_users', sp.max_users,
+                'max_team_members', sp.max_team_members,
                 'max_projects', sp.max_projects,
+                
+                -- Build Limits
+                'max_builds_per_hour', sp.max_builds_per_hour,
+                'max_builds_per_day', sp.max_builds_per_day,
+                'max_builds_per_month', sp.max_builds_per_month,
+                'max_concurrent_builds', sp.max_concurrent_builds,
+                'max_build_duration_minutes', sp.max_build_duration_minutes,
+                'max_build_size_mb', sp.max_build_size_mb,
+                
+                -- Build Resources
+                'cpu_cores_per_build', sp.cpu_cores_per_build,
+                'memory_gb_per_build', sp.memory_gb_per_build,
+                
+                -- Deployment Limits
                 'max_deployments_per_month', sp.max_deployments_per_month,
-                'max_apps', sp.max_apps,
+                'max_concurrent_deployments', sp.max_concurrent_deployments,
+                'max_environments_per_project', sp.max_environments_per_project,
+                'max_preview_environments', sp.max_preview_environments,
+                'rollback_retention_count', sp.rollback_retention_count,
+                
+                -- Runtime Resources
+                'cpu_cores_per_deployment', sp.cpu_cores_per_deployment,
+                'memory_gb_per_deployment', sp.memory_gb_per_deployment,
+                
+                -- Storage Limits
                 'storage_gb', sp.storage_gb,
-                'description', sp.description
+                'max_build_artifacts_gb', sp.max_build_artifacts_gb,
+                'max_database_storage_gb', sp.max_database_storage_gb,
+                'max_logs_retention_days', sp.max_logs_retention_days,
+                'max_backup_retention_days', sp.max_backup_retention_days,
+                
+                -- Traffic & Bandwidth
+                'bandwidth_gb_per_month', sp.bandwidth_gb_per_month,
+                'requests_per_minute', sp.requests_per_minute,
+                'ddos_protection_enabled', sp.ddos_protection_enabled,
+                
+                -- Integrations & Features
+                'max_webhooks_per_project', sp.max_webhooks_per_project,
+                'max_api_keys_per_project', sp.max_api_keys_per_project,
+                'max_custom_domains', sp.max_custom_domains,
+                'ssl_certificates_included', sp.ssl_certificates_included,
+                'advanced_analytics_enabled', sp.advanced_analytics_enabled,
+                'audit_logs_enabled', sp.audit_logs_enabled,
+                'audit_logs_retention_days', sp.audit_logs_retention_days,
+                
+                -- Support & SLA
+                'support_level', sp.support_level,
+                'sla_uptime_percentage', sp.sla_uptime_percentage,
+                'support_response_hours', sp.support_response_hours,
+                
+                -- Feature Flags
+                'custom_runtime_configs_enabled', sp.custom_runtime_configs_enabled,
+                'kubernetes_deployment_enabled', sp.kubernetes_deployment_enabled,
+                'multi_region_enabled', sp.multi_region_enabled,
+                'white_label_enabled', sp.white_label_enabled
             )
         )
         FROM subscriptions sub
@@ -104,7 +215,7 @@ SELECT
         JOIN company_users cu
             ON cu.company_id = sub.company_id
            AND cu.user_id = u.id
-        WHERE sub.status IN ('active', 'trialing', 'past_due')
+        WHERE sub.status IN ('pending', 'active', 'trialing', 'past_due')
         ORDER BY sub.current_period_end DESC
         LIMIT 1
     ) AS subscription
@@ -118,7 +229,6 @@ GROUP BY u.id;
 `;
 
         const response = await db.query(query, [req.params.accessToken]);
-
         if (response.rows.length === 0) {
             return res.status(401).json({
                 error: true,

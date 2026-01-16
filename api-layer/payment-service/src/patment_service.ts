@@ -2,17 +2,16 @@ import express, { type NextFunction } from 'express';
 import http from 'http';
 import cors from 'cors';
 
-import UserAccountManager from './routes/UserAccountManagerRoutes';
-import TeamManager from './routes/TeamManagerRoutes';
-import CompanyManager from './routes/CompanyManagerRoutes';
-import ProjectManager from './routes/ProjectsManagerRoutes';
-import GithubRoutes from './routes/GithubRoutes';
+import PaymentRoutes from './routes/subscriptionRoutes'
+
 import config from './config/config';
 import logging from './config/logging';
 import redisClient from './config/redis';
 
-const NAMESPACE = 'CoreAPI';
+const NAMESPACE = 'PaymentService';
 const app = express();
+
+// app.use('/webhooks', webhookRouter);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -30,15 +29,15 @@ app.use((req, res, next) => {
     next();
 });
 
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', env: process.env.NODE_ENV || 'development' });
-});
+app.use('/payments', PaymentRoutes);
 
-app.use('/account-manager', UserAccountManager);
-app.use('/teams-manager', TeamManager);
-app.use('/company-manager', CompanyManager);
-app.use('/projects-manager', ProjectManager);
-app.use('/github', GithubRoutes);
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        service: 'payment-service',
+        timestamp: new Date().toISOString(),
+    });
+});
 
 app.use((req, res, next: NextFunction) => {
     const error = new Error('Not Found');
