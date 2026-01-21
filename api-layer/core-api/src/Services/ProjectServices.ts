@@ -1,4 +1,4 @@
-import { type Request, type  Response } from 'express';
+import { type Request, type Response } from 'express';
 import logging from '../config/logging';
 import { CustomRequestValidationResult } from '../common/comon';
 import db from '../config/postgresql';
@@ -580,6 +580,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
 
     try {
         const { accessToken, projectId, environment = 'production' } = req.body;
+        const buildId = req.query.buildId as string | undefined;
 
         const userID = await getUserIdFromSessionToken(accessToken);
 
@@ -607,6 +608,176 @@ const TriggerDeploy = async (req: Request, res: Response) => {
 
         const project = projectResult.rows[0];
 
+        // If buildId is provided, skip build and trigger deployment directly
+        if (buildId) {
+            console.log(`Using existing build: ${buildId}`);
+
+            // Fetch the existing build
+            const existingBuildResult = await db.query(
+                `SELECT id, project_id, image_tags, metadata, commit_hash, branch, status 
+                 FROM builds 
+                 WHERE id = $1 AND project_id = $2`,
+                [buildId, projectId],
+            );
+
+            if (existingBuildResult.rows.length === 0) {
+                return res.status(404).json({
+                    error: true,
+                    errmsg: 'Build not found or does not belong to this project',
+                });
+            }
+
+            const existingBuild = existingBuildResult.rows[0];
+
+            // Validate build is completed
+            if (existingBuild.status !== 'completed') {
+                return res.status(400).json({
+                    error: true,
+                    errmsg: `Build status is '${existingBuild.status}'. Only completed builds can be deployed.`,
+                });
+            }
+
+            // Validate image tags exist
+            if (!existingBuild.image_tags || existingBuild.image_tags.length === 0) {
+                return res.status(400).json({
+                    error: true,
+                    errmsg: 'Build has no image tags. Cannot deploy.',
+                });
+            }
+
+            let domain = null;
+            let subdomain = null;
+
+            if (environment === 'production') {
+                domain = `${project.slug}.obtura.app`;
+            } else if (environment === 'staging') {
+                subdomain = 'staging';
+                domain = `staging.${project.slug}.obtura.app`;
+            } else if (environment === 'preview') {
+                subdomain = existingBuild.branch.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+                domain = `${subdomain}.preview.${project.slug}.obtura.app`;
+            }
+
+            const approvalRequired = environment === 'production';
+
+            // Create deployment entry directly
+            const deploymentResult = await db.query(
+                `INSERT INTO deployments (
+                    project_id, 
+                    build_id, 
+                    environment, 
+                    branch, 
+                    commit_hash, 
+                    commit_message, 
+                    commit_author,
+                    domain,
+                    subdomain,
+                    deployed_by_user_id,
+                    deployment_trigger,
+                    approval_required,
+                    status,
+                    is_ephemeral,
+                    preview_expires_at,
+                    deployment_started_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
+                RETURNING id`,
+                [
+                    projectId,
+                    buildId,
+                    environment,
+                    existingBuild.branch,
+                    existingBuild.commit_hash,
+                    existingBuild.metadata?.commit_message || 'N/A',
+                    existingBuild.metadata?.commit_author || 'Unknown',
+                    domain,
+                    subdomain,
+                    userID,
+                    'manual',
+                    approvalRequired,
+                    'pending',
+                    environment === 'preview',
+                    environment === 'preview' ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null,
+                    new Date(),
+                ],
+            );
+
+            const deploymentId = deploymentResult.rows[0].id;
+
+            // Create initial deployment event
+            await db.query(
+                `INSERT INTO deployment_events (
+                    deployment_id,
+                    event_type,
+                    event_message,
+                    severity
+                ) VALUES ($1, $2, $3, $4)`,
+                [deploymentId, 'started', `Deployment triggered by user for ${environment} environment using existing build`, 'info'],
+            );
+
+            // If approval is required, create approval entry
+            if (approvalRequired) {
+                await db.query(
+                    `INSERT INTO deployment_approvals (
+                        deployment_id,
+                        requested_by_user_id,
+                        status
+                    ) VALUES ($1, $2, $3)`,
+                    [deploymentId, userID, 'pending'],
+                );
+            }
+
+            // Publish directly to deployment queue (obtura.deploys exchange)
+            await rabbitmq.connect();
+            const channel = await rabbitmq.getChannel();
+
+            // Instead of just sending buildId
+            await channel.publish(
+                'obtura.deploys',
+                'deploy.triggered',
+                Buffer.from(
+                    JSON.stringify({
+                        buildId: buildId,
+                        deploymentId: deploymentId,
+                        projectId: projectId,
+                        project: {
+                            id: project.id,
+                            slug: project.slug,
+                            name: project.name,
+                        },
+                        build: {
+                            id: existingBuild.id,
+                            imageTags: existingBuild.image_tags,
+                            branch: existingBuild.branch,
+                            commitHash: existingBuild.commit_hash,
+                            metadata: existingBuild.metadata,
+                        },
+                        deployment: {
+                            id: deploymentId,
+                            environment: environment,
+                            domain: domain,
+                            subdomain: subdomain,
+                        },
+                    }),
+                ),
+                { persistent: true, timestamp: Date.now() },
+            );
+
+            console.log(`✅ Deployment ${deploymentId} triggered for existing build ${buildId}`);
+
+            return res.status(200).json({
+                buildId: buildId,
+                deploymentId: deploymentId,
+                commitHash: existingBuild.commit_hash,
+                branch: existingBuild.branch,
+                environment: environment,
+                domain: domain,
+                status: approvalRequired ? 'awaiting_approval' : 'queued',
+                approvalRequired: approvalRequired,
+                skippedBuild: true,
+            });
+        }
+
+        // Original build flow continues below...
         const gitBranches = project.git_branches || [];
         const targetBranch = gitBranches.find((b: any) => b.type === environment);
 
@@ -664,7 +835,6 @@ const TriggerDeploy = async (req: Request, res: Response) => {
             });
         }
 
-        // Start a transaction to ensure both build and deployment are created together
         const client = await db.connect();
 
         try {
@@ -672,13 +842,12 @@ const TriggerDeploy = async (req: Request, res: Response) => {
 
             const buildResult = await client.query('INSERT INTO builds (project_id, initiated_by_user_id, commit_hash, branch, status) VALUES ($1, $2, $3, $4, $5) RETURNING id', [projectId, userID, commitHash, branch, 'PENDING']);
 
-            const buildId = buildResult.rows[0].id;
+            const newBuildId = buildResult.rows[0].id;
 
             let domain = null;
             let subdomain = null;
 
             if (environment === 'production') {
-                // You might want to fetch this from project settings
                 domain = `${project.slug}.obtura.app`;
             } else if (environment === 'staging') {
                 subdomain = 'staging';
@@ -688,10 +857,8 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                 domain = `${subdomain}.preview.${project.slug}.obtura.app`;
             }
 
-            // Check if approval is required for production deployments
             const approvalRequired = environment === 'production';
 
-            // Create deployment entry
             const deploymentResult = await client.query(
                 `INSERT INTO deployments (
                     project_id, 
@@ -712,29 +879,11 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                     deployment_started_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
                 RETURNING id`,
-                [
-                    projectId,
-                    buildId,
-                    environment,
-                    branch,
-                    commitHash,
-                    commitMessage,
-                    commitAuthor,
-                    domain,
-                    subdomain,
-                    userID,
-                    'manual', // deployment_trigger
-                    approvalRequired,
-                    'pending', // status
-                    environment === 'preview', // is_ephemeral
-                    environment === 'preview' ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null, // preview_expires_at (7 days)
-                    new Date(),
-                ],
+                [projectId, newBuildId, environment, branch, commitHash, commitMessage, commitAuthor, domain, subdomain, userID, 'manual', approvalRequired, 'pending', environment === 'preview', environment === 'preview' ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null, new Date()],
             );
 
             const deploymentId = deploymentResult.rows[0].id;
 
-            // Create initial deployment event
             await client.query(
                 `INSERT INTO deployment_events (
                     deployment_id,
@@ -745,7 +894,6 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                 [deploymentId, 'started', `Deployment triggered by user for ${environment} environment`, 'info'],
             );
 
-            // If approval is required, create approval entry
             if (approvalRequired) {
                 await client.query(
                     `INSERT INTO deployment_approvals (
@@ -759,7 +907,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
 
             await client.query('COMMIT');
 
-            // Publish to RabbitMQ
+            // Publish to RabbitMQ for build service
             await rabbitmq.connect();
             const channel = await rabbitmq.getChannel();
 
@@ -768,7 +916,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                 'build.triggered',
                 Buffer.from(
                     JSON.stringify({
-                        buildId: buildId,
+                        buildId: newBuildId,
                         deploymentId: deploymentId,
                         projectId: projectId,
                         commitHash: commitHash,
@@ -782,7 +930,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
             );
 
             return res.status(200).json({
-                buildId: buildId,
+                buildId: newBuildId,
                 deploymentId: deploymentId,
                 commitHash: commitHash,
                 branch: branch,

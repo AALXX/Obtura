@@ -236,6 +236,7 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		DeploymentID *string `json:"deploymentId,omitempty"`
 		ProjectID    string  `json:"projectId"`
 		Branch       string  `json:"branch"`
+		CommitHash   string  `json:"commitHash"`
 		Deploy       *bool   `json:"deploy,omitempty"`
 	}
 	ctx := context.Background()
@@ -442,11 +443,28 @@ LIMIT 1;
 		w.streamLog(job.BuildID, fmt.Sprintf("Detected framework: %s", result.Frameworks[0].Name))
 	}
 
+	if len(result.Architecture.Databases) > 0 {
+		log.Printf("🗄️ Detected %d database dependencies:", len(result.Architecture.Databases))
+		w.streamLog(job.BuildID, fmt.Sprintf("🗄️ Detected %d database dependencies", len(result.Architecture.Databases)))
+		for _, db := range result.Architecture.Databases {
+			w.streamLog(job.BuildID, fmt.Sprintf("  - %s (%s)", db.Name, db.Type))
+		}
+	}
+
+	if len(result.Architecture.Services) > 0 {
+		log.Printf("🔗 Detected %d external services:", len(result.Architecture.Services))
+		w.streamLog(job.BuildID, fmt.Sprintf("🔗 Detected %d external services", len(result.Architecture.Services)))
+		for _, svc := range result.Architecture.Services {
+			w.streamLog(job.BuildID, fmt.Sprintf("  - %s (%s)", svc.Name, svc.Type))
+		}
+	}
+
 	frameworksJSON, _ := json.Marshal(map[string]interface{}{
-		"frameworks": result.Frameworks,
-		"isMonorepo": result.IsMonorepo,
-		"plan":       planName,
-		"buildSize":  buildSize,
+		"frameworks":   result.Frameworks,
+		"isMonorepo":   result.IsMonorepo,
+		"architecture": result.Architecture,
+		"plan":         planName,
+		"buildSize":    buildSize,
 		"quota": map[string]interface{}{
 			"maxServices":      quotaLimits.MaxServices,
 			"maxBuildSize":     quotaLimits.MaxBuildSize,
@@ -467,7 +485,7 @@ LIMIT 1;
 				log.Printf("❌ Environment validation failed: %v", err)
 				w.streamStatus(job.BuildID, "failed", "Missing required environment variables")
 				buildTimeSeconds := int(time.Since(buildStartTime).Seconds())
-				w.db.ExecContext(ctx, "UPDATE builds SET status = 'failed', error_message = $1 WHERE id = $2, build_time_seconds = $3",
+				w.db.ExecContext(ctx, "UPDATE bui]lds SET status = 'failed', error_message = $1 WHERE id = $2, build_time_seconds = $3",
 					fmt.Sprintf("Missing required environment variables: %v", err), job.BuildID, buildTimeSeconds)
 				msg.Nack(false, false)
 				return
@@ -698,26 +716,59 @@ LIMIT 1;
 	w.streamLog(job.BuildID, fmt.Sprintf("✅ Build completed successfully with %d service(s) in %dm %ds",
 		len(result.Frameworks), buildTimeSeconds/60, buildTimeSeconds%60))
 
+	// In Build Service worker.go
+
+	// After successful build completion
 	if job.Deploy != nil && *job.Deploy {
 		fmt.Println("Deploy is enabled")
-		
-		// send msg to deploy queue
-		err := w.channel.Publish(
-			"obtura.deploys",
-			"deploy.triggered",
-			false,
-			false,
+
+		// Prepare deployment message with full data
+		deployMsg := map[string]interface{}{
+			"buildId":      job.BuildID,
+			"deploymentId": job.DeploymentID,
+			"projectId":    job.ProjectID,
+			"project": map[string]string{
+				"id": job.ProjectID,
+				// Add more project data if available
+			},
+			"build": map[string]interface{}{
+				"id":         job.BuildID,
+				"imageTags":  imageTags,
+				"branch":     job.Branch,
+				"commitHash": job.CommitHash, // You'll need to pass this
+				"metadata":   result,     // Framework detection results
+			},
+			"deployment": map[string]interface{}{
+				"id":          job.DeploymentID,
+				"environment": "production", // or from job
+			},
+		}
+
+		msgBody, err := json.Marshal(deployMsg)
+		if err != nil {
+			log.Printf("❌ Failed to marshal deploy message: %v", err)
+			return
+		}
+
+		// Publish to exchange with proper routing key
+		err = w.channel.Publish(
+			"obtura.deploys",   // Exchange name
+			"deploy.triggered", // Routing key
+			false,              // mandatory
+			false,              // immediate
 			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        []byte(job.BuildID),
+				ContentType: "application/json",
+				Body:        msgBody,
+				Timestamp:   time.Now(),
 			},
 		)
 		if err != nil {
 			log.Printf("❌ Failed to publish deploy message: %v", err)
+		} else {
+			log.Printf("✅ Published deployment message for build %s", job.BuildID)
 		}
-
 	}
-	
+
 	w.streamStatus(job.BuildID, "completed", "Build completed successfully")
 
 	if logBroker := logger.GetLogBroker(); logBroker != nil {

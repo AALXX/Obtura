@@ -30,6 +30,7 @@ const Account = async () => {
                     companyRole={resp.data.companyRole}
                     userImg={session.user.image}
                     hasCompany={resp.data.hasCompany}
+                    canEditCompany={resp.data.canEditCompany}
                 />
             </div>
         )

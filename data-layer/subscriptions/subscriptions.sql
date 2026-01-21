@@ -10,7 +10,6 @@ CREATE TABLE subscription_plans (
     
     -- Team & Organization
     max_users INTEGER, -- NULL = unlimited
-    max_team_members INTEGER,
     max_projects INTEGER,
     
     -- Build Limits (matches your Build Service quotas)

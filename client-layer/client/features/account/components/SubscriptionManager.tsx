@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
-import { CreditCard, Calendar, TrendingUp, AlertCircle, CheckCircle, XCircle, Download, FileText } from 'lucide-react'
+import { CreditCard, Calendar, TrendingUp, AlertCircle, CheckCircle, XCircle, Download, FileText, Zap, Briefcase, Crown } from 'lucide-react'
 import axios from 'axios'
 
 interface Plan {
@@ -20,7 +20,6 @@ interface Plan {
     max_environments_per_project: number
     max_preview_environments: number
     max_custom_domains: number
-    max_team_members: number
     max_api_keys: number
     max_webhooks: number
     max_database_storage_gb: number
@@ -51,6 +50,13 @@ interface Subscription {
     bandwidth_reset_at: string
 }
 
+const subscriptionPlans = [
+    { id: 'starter', name: 'Starter', price: 79, icon: Zap },
+    { id: 'team', name: 'Team', price: 299, icon: TrendingUp },
+    { id: 'business', name: 'Business', price: 799, icon: Briefcase },
+    { id: 'enterprise', name: 'Enterprise', price: 2199, icon: Crown }
+]
+
 interface SubscriptionManagerProps {
     subscription: Subscription
     accessToken: string
@@ -59,6 +65,11 @@ interface SubscriptionManagerProps {
 const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ subscription, accessToken }) => {
     const [activeTab, setActiveTab] = useState<'overview' | 'usage' | 'billing' | 'invoices'>('overview')
     const [isLoading, setIsLoading] = useState(false)
+    const [selectedPlan, setSelectedPlan] = useState(subscription.plan.id)
+    const [cardNumber, setCardNumber] = useState('')
+    const [expiryDate, setExpiryDate] = useState('')
+    const [cvv, setCvv] = useState('')
+    const [cardName, setCardName] = useState('')
 
     const getStatusIcon = (status: string) => {
         switch (status) {
@@ -83,6 +94,91 @@ const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ subscription,
                 return 'text-yellow-500'
             default:
                 return 'text-red-500'
+        }
+    }
+
+    const formatCardNumber = (value: string) => {
+        const v = value.replace(/\s+/g, '').replace(/[^0-9]/gi, '')
+        const matches = v.match(/\d{4,16}/g)
+        const match = (matches && matches[0]) || ''
+        const parts = []
+
+        for (let i = 0, len = match.length; i < len; i += 4) {
+            parts.push(match.substring(i, i + 4))
+        }
+
+        if (parts.length) {
+            return parts.join(' ')
+        } else {
+            return value
+        }
+    }
+
+    const formatExpiryDate = (value: string) => {
+        const v = value.replace(/\s+/g, '').replace(/[^0-9]/gi, '')
+        if (v.length >= 2) {
+            return v.slice(0, 2) + '/' + v.slice(2, 4)
+        }
+        return v
+    }
+
+    const handleChangePlan = async () => {
+        if (selectedPlan === subscription.plan.id) {
+            alert('Please select a different plan')
+            return
+        }
+
+        if (!confirm(`Are you sure you want to change to the ${subscriptionPlans.find(p => p.id === selectedPlan)?.name} plan?`)) {
+            return
+        }
+
+        setIsLoading(true)
+        try {
+            const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/subscription/change-plan`, {
+                accessToken,
+                newPlanId: selectedPlan
+            })
+
+            if (resp.status === 200) {
+                alert('Plan changed successfully!')
+                window.location.reload()
+            }
+        } catch (error) {
+            console.error('Error changing plan:', error)
+            alert('Failed to change plan. Please try again.')
+        } finally {
+            setIsLoading(false)
+        }
+    }
+
+    const handleUpdatePaymentMethod = async () => {
+        if (!cardNumber || !expiryDate || !cvv || !cardName) {
+            alert('Please fill in all card details')
+            return
+        }
+
+        setIsLoading(true)
+        try {
+            const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/subscription/update-payment`, {
+                accessToken,
+                cardNumber: cardNumber.replace(/\s/g, ''),
+                expiryDate,
+                cvv,
+                cardName
+            })
+
+            if (resp.status === 200) {
+                alert('Payment method updated successfully!')
+                setCardNumber('')
+                setExpiryDate('')
+                setCvv('')
+                setCardName('')
+            }
+        } catch (error) {
+            console.error('Error updating payment method:', error)
+            alert('Failed to update payment method. Please try again.')
+        } finally {
+            setIsLoading(false)
         }
     }
 
@@ -241,7 +337,19 @@ const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ subscription,
 
                             {/* Actions */}
                             <div className="space-y-3">
-                                <button className="w-full rounded-md bg-white px-4 py-3 font-medium text-black transition-colors hover:bg-gray-100">Upgrade Plan</button>
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-gray-400">Change Plan</label>
+                                    <select value={selectedPlan} onChange={e => setSelectedPlan(e.target.value)} className="w-full rounded-md border border-neutral-800 bg-[#0a0a0a] px-4 py-3 text-white focus:border-orange-500 focus:outline-none">
+                                        {subscriptionPlans.map(plan => (
+                                            <option key={plan.id} value={plan.id}>
+                                                {plan.name} - €{plan.price}/month
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <button onClick={handleChangePlan} disabled={isLoading || selectedPlan === subscription.plan.id} className="w-full rounded-md bg-white px-4 py-3 font-medium text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50">
+                                    {isLoading ? 'Processing...' : 'Change Plan'}
+                                </button>
                                 {subscription.cancel_at_period_end ? (
                                     <button onClick={handleReactivateSubscription} disabled={isLoading} className="w-full rounded-md border border-green-500 bg-green-500/10 px-4 py-3 font-medium text-green-500 transition-colors hover:bg-green-500/20">
                                         {isLoading ? 'Processing...' : 'Reactivate Subscription'}
@@ -389,7 +497,32 @@ const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ subscription,
                                 </div>
                             </div>
 
-                            <button className="w-full rounded-md border border-white px-4 py-3 font-medium text-white transition-colors hover:bg-[#ffffff1a]">Update Payment Method</button>
+                            <div className="rounded-lg border border-neutral-800 bg-[#0a0a0a] p-6">
+                                <h3 className="mb-4 text-lg font-semibold text-white">Change Payment Method</h3>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="mb-2 block text-sm font-medium text-gray-400">Cardholder Name</label>
+                                        <input type="text" value={cardName} onChange={e => setCardName(e.target.value)} placeholder="John Doe" className="w-full rounded-md border border-neutral-800 bg-[#0a0a0a] px-4 py-3 text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="mb-2 block text-sm font-medium text-gray-400">Card Number</label>
+                                        <input type="text" value={cardNumber} onChange={e => setCardNumber(formatCardNumber(e.target.value))} placeholder="1234 5678 9012 3456" maxLength={19} className="w-full rounded-md border border-neutral-800 bg-[#0a0a0a] px-4 py-3 text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="mb-2 block text-sm font-medium text-gray-400">Expiry Date</label>
+                                            <input type="text" value={expiryDate} onChange={e => setExpiryDate(formatExpiryDate(e.target.value))} placeholder="MM/YY" maxLength={5} className="w-full rounded-md border border-neutral-800 bg-[#0a0a0a] px-4 py-3 text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="mb-2 block text-sm font-medium text-gray-400">CVV</label>
+                                            <input type="text" value={cvv} onChange={e => setCvv(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))} placeholder="123" maxLength={4} className="w-full rounded-md border border-neutral-800 bg-[#0a0a0a] px-4 py-3 text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none" />
+                                        </div>
+                                    </div>
+                                    <button onClick={handleUpdatePaymentMethod} disabled={isLoading} className="w-full rounded-md border border-white px-4 py-3 font-medium text-white transition-colors hover:bg-[#ffffff1a] disabled:cursor-not-allowed disabled:opacity-50">
+                                        {isLoading ? 'Processing...' : 'Change Payment Method'}
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
 

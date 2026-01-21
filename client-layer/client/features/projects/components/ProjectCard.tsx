@@ -14,7 +14,7 @@ const ProjectCard: React.FC<ProjectResponse> = ({ id, projectName, createdAt, sl
     }
 
     return (
-        <div className="group relative rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5 transition-all hover:border-zinc-700 hover:bg-[#202020]">
+        <div className="group relative rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5 transition-all hover:border-zinc-700 hover:bg-[#202020] mt-6">
             <div className="flex items-start justify-between">
                 <div className="flex-1">
                     <div className="mb-3 flex items-center gap-3">

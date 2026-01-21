@@ -9,7 +9,7 @@ import { signOut } from 'next-auth/react'
 import axios from 'axios'
 import SubscriptionManager from './components/SubscriptionManager'
 
-const UserAccount: React.FC<UserResponse & { userAccessToken: string; userImg: string | undefined | null }> = ({ error, email, name, accountType, memberSince, activeSessions, userSubscription, companyName, companyRole, userImg, userAccessToken, hasCompany }) => {
+const UserAccount: React.FC<UserResponse & { userAccessToken: string; userImg: string | undefined | null }> = ({ error, email, name, accountType, memberSince, activeSessions, userSubscription, companyName, companyRole, userImg, userAccessToken, hasCompany, canEditCompany }) => {
     const [showSettings, setShowSettings] = useState(false)
     const [showSubscriptionManager, setShowSubscriptionManager] = useState(false)
 
@@ -146,10 +146,12 @@ const UserAccount: React.FC<UserResponse & { userAccessToken: string; userImg: s
                                 <h3 className="text-base font-semibold text-white sm:text-lg">Subscription</h3>
                                 <p className="text-xs text-gray-400 sm:text-sm">Your current plan and usage</p>
                             </div>
-                            <button onClick={() => setShowSubscriptionManager(true)} className="flex items-center gap-2 rounded bg-white px-3 py-1.5 text-xs font-medium text-black transition-colors hover:bg-gray-100 sm:px-4 sm:py-2 sm:text-sm">
-                                <CreditCard className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                                Manage
-                            </button>
+                            {canEditCompany && (
+                                <button onClick={() => setShowSubscriptionManager(true)} className="flex items-center gap-2 rounded bg-white px-3 py-1.5 text-xs font-medium text-black transition-colors hover:bg-gray-100 sm:px-4 sm:py-2 sm:text-sm">
+                                    <CreditCard className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                                    Manage
+                                </button>
+                            )}
                         </div>
                         <div className="rounded border border-neutral-800 bg-[#1b1b1b] p-4 sm:p-6">
                             <div className="space-y-5">

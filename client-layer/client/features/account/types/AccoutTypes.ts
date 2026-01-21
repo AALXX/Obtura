@@ -60,7 +60,6 @@ export interface Plan {
     max_environments_per_project: number
     max_preview_environments: number
     max_custom_domains: number
-    max_team_members: number
     max_api_keys: number
     max_webhooks: number
     max_database_storage_gb: number
@@ -89,5 +88,6 @@ export interface UserResponse {
         display_name: string
         hierarchy_level: number
     }
+    canEditCompany?: boolean
     hasCompany?: boolean
 }

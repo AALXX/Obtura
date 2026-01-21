@@ -15,12 +15,30 @@ type Framework struct {
 	BuildCmd string
 	Runtime  string
 	Port     int
-	Path     string 
+	Path     string
+}
+
+type DatabaseDependency struct {
+	Name     string
+	Type     string // "relational", "nosql", "cache", etc.
+	Required bool
+}
+
+type ServiceDependency struct {
+	Name     string
+	Type     string // "cache", "message_queue", "storage", etc.
+	Required bool
+}
+
+type ArchitectureInfo struct {
+	Databases []DatabaseDependency
+	Services  []ServiceDependency
 }
 
 type ProjectStructure struct {
-	Frameworks []*Framework
-	IsMonorepo bool
+	Frameworks   []*Framework
+	IsMonorepo   bool
+	Architecture *ArchitectureInfo
 }
 
 var commonSubdirs = []string{
@@ -34,11 +52,11 @@ func DetectFramework(projectPath string) (*Framework, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if len(result.Frameworks) == 0 {
 		return nil, errors.New("unable to detect framework: no recognized project files found")
 	}
-	
+
 	return result.Frameworks[0], nil
 }
 
@@ -46,6 +64,10 @@ func DetectAllFrameworks(projectPath string) (*ProjectStructure, error) {
 	result := &ProjectStructure{
 		Frameworks: make([]*Framework, 0),
 		IsMonorepo: false,
+		Architecture: &ArchitectureInfo{
+			Databases: make([]DatabaseDependency, 0),
+			Services:  make([]ServiceDependency, 0),
+		},
 	}
 
 	framework := detectFrameworkInDir(projectPath, ".")
@@ -67,11 +89,11 @@ func DetectAllFrameworks(projectPath string) (*ProjectStructure, error) {
 		}
 
 		dirName := strings.ToLower(entry.Name())
-		
-		if dirName == "node_modules" || dirName == ".git" || 
-		   dirName == "vendor" || dirName == "dist" || 
-		   dirName == "build" || dirName == ".venv" ||
-		   dirName == "venv" || dirName == "__pycache__" {
+
+		if dirName == "node_modules" || dirName == ".git" ||
+			dirName == "vendor" || dirName == "dist" ||
+			dirName == "build" || dirName == ".venv" ||
+			dirName == "venv" || dirName == "__pycache__" {
 			continue
 		}
 
@@ -88,7 +110,6 @@ func DetectAllFrameworks(projectPath string) (*ProjectStructure, error) {
 			subFramework := detectFrameworkInDir(subPath, entry.Name())
 			if subFramework != nil {
 				result.Frameworks = append(result.Frameworks, subFramework)
-				result.IsMonorepo = true
 			}
 		}
 	}
@@ -100,10 +121,10 @@ func DetectAllFrameworks(projectPath string) (*ProjectStructure, error) {
 			}
 
 			dirName := entry.Name()
-			if dirName == "node_modules" || dirName == ".git" || 
-			   dirName == "vendor" || dirName == "dist" || 
-			   dirName == "build" || dirName == ".venv" ||
-			   dirName == "venv" || dirName == "__pycache__" {
+			if dirName == "node_modules" || dirName == ".git" ||
+				dirName == "vendor" || dirName == "dist" ||
+				dirName == "build" || dirName == ".venv" ||
+				dirName == "venv" || dirName == "__pycache__" {
 				continue
 			}
 
@@ -111,7 +132,6 @@ func DetectAllFrameworks(projectPath string) (*ProjectStructure, error) {
 			subFramework := detectFrameworkInDir(subPath, entry.Name())
 			if subFramework != nil {
 				result.Frameworks = append(result.Frameworks, subFramework)
-				result.IsMonorepo = true
 			}
 		}
 	}
@@ -119,6 +139,12 @@ func DetectAllFrameworks(projectPath string) (*ProjectStructure, error) {
 	if len(result.Frameworks) == 0 {
 		return nil, errors.New("unable to detect framework: no recognized project files found")
 	}
+
+	// Determine if this is a monorepo based on number of frameworks detected
+	result.IsMonorepo = len(result.Frameworks) > 1
+
+	// Analyze architecture requirements
+	analyzeArchitecture(projectPath, result)
 
 	return result, nil
 }
@@ -273,7 +299,7 @@ func detectPythonFramework(projectPath string) (*Framework, error) {
 				Port:     5000,
 			}, nil
 		}
-		
+
 		if strings.Contains(strings.ToLower(string(content)), "fastapi") {
 			return &Framework{
 				Name:     "FastAPI",
@@ -384,7 +410,7 @@ func detectRubyFramework(projectPath string) (*Framework, error) {
 	content, err := os.ReadFile(gemfilePath)
 	if err == nil {
 		contentStr := string(content)
-		
+
 		if strings.Contains(contentStr, "rails") {
 			return &Framework{
 				Name:     "Ruby on Rails",
@@ -423,7 +449,7 @@ func detectJVMFramework(projectPath string) (*Framework, error) {
 				Port:     8080,
 			}, nil
 		}
-		
+
 		return &Framework{
 			Name:     "Maven",
 			Runtime:  "eclipse-temurin:21-jdk-alpine",
@@ -455,7 +481,7 @@ func detectRustFramework(projectPath string) (*Framework, error) {
 	content, err := pkg.ReadFile(cargoPath)
 	if err == nil {
 		contentStr := string(content)
-		
+
 		if strings.Contains(contentStr, "actix-web") {
 			return &Framework{
 				Name:     "Rust (Actix Web)",
@@ -481,4 +507,395 @@ func detectRustFramework(projectPath string) (*Framework, error) {
 		BuildCmd: "cargo build --release",
 		Port:     8080,
 	}, nil
+}
+
+func analyzeArchitecture(projectPath string, result *ProjectStructure) {
+	// Analyze each framework directory for dependencies
+	for _, framework := range result.Frameworks {
+		servicePath := filepath.Join(projectPath, framework.Path)
+
+		// Check for database dependencies
+		analyzeDatabaseDependencies(servicePath, result.Architecture)
+
+		// Check for service dependencies
+		analyzeServiceDependencies(servicePath, result.Architecture)
+	}
+
+	// Also check root level for monorepo-wide dependencies
+	if result.IsMonorepo {
+		analyzeDatabaseDependencies(projectPath, result.Architecture)
+		analyzeServiceDependencies(projectPath, result.Architecture)
+	}
+}
+
+func analyzeDatabaseDependencies(dirPath string, arch *ArchitectureInfo) {
+	seenDBs := make(map[string]bool)
+	for _, db := range arch.Databases {
+		seenDBs[db.Name] = true
+	}
+
+	// Check package.json for Node.js databases
+	if pkg.FileExists(filepath.Join(dirPath, "package.json")) {
+		data, err := pkg.ReadFile(filepath.Join(dirPath, "package.json"))
+		if err == nil {
+			var packageJSON struct {
+				Dependencies    map[string]string `json:"dependencies"`
+				DevDependencies map[string]string `json:"devDependencies"`
+			}
+			if json.Unmarshal(data, &packageJSON) == nil {
+				allDeps := make(map[string]string)
+				for k, v := range packageJSON.Dependencies {
+					allDeps[k] = v
+				}
+				for k, v := range packageJSON.DevDependencies {
+					allDeps[k] = v
+				}
+
+				// PostgreSQL
+				if _, ok := allDeps["pg"]; ok {
+					if !seenDBs["postgresql"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "postgresql",
+							Type:     "relational",
+							Required: true,
+						})
+						seenDBs["postgresql"] = true
+					}
+				}
+				if _, ok := allDeps["pg-promise"]; ok {
+					if !seenDBs["postgresql"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "postgresql",
+							Type:     "relational",
+							Required: true,
+						})
+						seenDBs["postgresql"] = true
+					}
+				}
+
+				// MySQL
+				if _, ok := allDeps["mysql"]; ok {
+					if !seenDBs["mysql"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "mysql",
+							Type:     "relational",
+							Required: true,
+						})
+						seenDBs["mysql"] = true
+					}
+				}
+				if _, ok := allDeps["mysql2"]; ok {
+					if !seenDBs["mysql"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "mysql",
+							Type:     "relational",
+							Required: true,
+						})
+						seenDBs["mysql"] = true
+					}
+				}
+
+				// MongoDB
+				if _, ok := allDeps["mongodb"]; ok {
+					if !seenDBs["mongodb"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "mongodb",
+							Type:     "nosql",
+							Required: true,
+						})
+						seenDBs["mongodb"] = true
+					}
+				}
+				if _, ok := allDeps["mongoose"]; ok {
+					if !seenDBs["mongodb"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "mongodb",
+							Type:     "nosql",
+							Required: true,
+						})
+						seenDBs["mongodb"] = true
+					}
+				}
+
+				// Redis
+				if _, ok := allDeps["redis"]; ok {
+					if !seenDBs["redis"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "redis",
+							Type:     "cache",
+							Required: true,
+						})
+						seenDBs["redis"] = true
+					}
+				}
+				if _, ok := allDeps["ioredis"]; ok {
+					if !seenDBs["redis"] {
+						arch.Databases = append(arch.Databases, DatabaseDependency{
+							Name:     "redis",
+							Type:     "cache",
+							Required: true,
+						})
+						seenDBs["redis"] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Check Python requirements
+	if pkg.FileExists(filepath.Join(dirPath, "requirements.txt")) {
+		content, err := pkg.ReadFile(filepath.Join(dirPath, "requirements.txt"))
+		if err == nil {
+			contentStr := strings.ToLower(string(content))
+
+			if strings.Contains(contentStr, "psycopg2") || strings.Contains(contentStr, "pg8000") {
+				if !seenDBs["postgresql"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "postgresql",
+						Type:     "relational",
+						Required: true,
+					})
+					seenDBs["postgresql"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "pymysql") || strings.Contains(contentStr, "mysql-connector") {
+				if !seenDBs["mysql"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "mysql",
+						Type:     "relational",
+						Required: true,
+					})
+					seenDBs["mysql"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "pymongo") {
+				if !seenDBs["mongodb"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "mongodb",
+						Type:     "nosql",
+						Required: true,
+					})
+					seenDBs["mongodb"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "redis") {
+				if !seenDBs["redis"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "redis",
+						Type:     "cache",
+						Required: true,
+					})
+					seenDBs["redis"] = true
+				}
+			}
+		}
+	}
+
+	// Check Go modules
+	if pkg.FileExists(filepath.Join(dirPath, "go.mod")) {
+		content, err := pkg.ReadFile(filepath.Join(dirPath, "go.mod"))
+		if err == nil {
+			contentStr := string(content)
+
+			if strings.Contains(contentStr, "github.com/lib/pq") || strings.Contains(contentStr, "github.com/jackc/pgx") {
+				if !seenDBs["postgresql"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "postgresql",
+						Type:     "relational",
+						Required: true,
+					})
+					seenDBs["postgresql"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "github.com/go-sql-driver/mysql") {
+				if !seenDBs["mysql"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "mysql",
+						Type:     "relational",
+						Required: true,
+					})
+					seenDBs["mysql"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "go.mongodb.org/mongo-driver") {
+				if !seenDBs["mongodb"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "mongodb",
+						Type:     "nosql",
+						Required: true,
+					})
+					seenDBs["mongodb"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "github.com/redis/go-redis") {
+				if !seenDBs["redis"] {
+					arch.Databases = append(arch.Databases, DatabaseDependency{
+						Name:     "redis",
+						Type:     "cache",
+						Required: true,
+					})
+					seenDBs["redis"] = true
+				}
+			}
+		}
+	}
+}
+
+func analyzeServiceDependencies(dirPath string, arch *ArchitectureInfo) {
+	seenServices := make(map[string]bool)
+	for _, svc := range arch.Services {
+		seenServices[svc.Name] = true
+	}
+
+	// Check package.json for Node.js services
+	if pkg.FileExists(filepath.Join(dirPath, "package.json")) {
+		data, err := pkg.ReadFile(filepath.Join(dirPath, "package.json"))
+		if err == nil {
+			var packageJSON struct {
+				Dependencies    map[string]string `json:"dependencies"`
+				DevDependencies map[string]string `json:"devDependencies"`
+			}
+			if json.Unmarshal(data, &packageJSON) == nil {
+				allDeps := make(map[string]string)
+				for k, v := range packageJSON.Dependencies {
+					allDeps[k] = v
+				}
+				for k, v := range packageJSON.DevDependencies {
+					allDeps[k] = v
+				}
+
+				// RabbitMQ
+				if _, ok := allDeps["amqplib"]; ok {
+					if !seenServices["rabbitmq"] {
+						arch.Services = append(arch.Services, ServiceDependency{
+							Name:     "rabbitmq",
+							Type:     "message_queue",
+							Required: true,
+						})
+						seenServices["rabbitmq"] = true
+					}
+				}
+				if _, ok := allDeps["amqp"]; ok {
+					if !seenServices["rabbitmq"] {
+						arch.Services = append(arch.Services, ServiceDependency{
+							Name:     "rabbitmq",
+							Type:     "message_queue",
+							Required: true,
+						})
+						seenServices["rabbitmq"] = true
+					}
+				}
+
+				// Redis (if not already detected as database)
+				if _, ok := allDeps["redis"]; ok {
+					if !seenServices["redis"] {
+						arch.Services = append(arch.Services, ServiceDependency{
+							Name:     "redis",
+							Type:     "cache",
+							Required: true,
+						})
+						seenServices["redis"] = true
+					}
+				}
+				if _, ok := allDeps["ioredis"]; ok {
+					if !seenServices["redis"] {
+						arch.Services = append(arch.Services, ServiceDependency{
+							Name:     "redis",
+							Type:     "cache",
+							Required: true,
+						})
+						seenServices["redis"] = true
+					}
+				}
+
+				// MinIO/S3
+				if _, ok := allDeps["aws-sdk"]; ok {
+					if !seenServices["minio"] {
+						arch.Services = append(arch.Services, ServiceDependency{
+							Name:     "minio",
+							Type:     "storage",
+							Required: true,
+						})
+						seenServices["minio"] = true
+					}
+				}
+				if _, ok := allDeps["minio"]; ok {
+					if !seenServices["minio"] {
+						arch.Services = append(arch.Services, ServiceDependency{
+							Name:     "minio",
+							Type:     "storage",
+							Required: true,
+						})
+						seenServices["minio"] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Check Python requirements for services
+	if pkg.FileExists(filepath.Join(dirPath, "requirements.txt")) {
+		content, err := pkg.ReadFile(filepath.Join(dirPath, "requirements.txt"))
+		if err == nil {
+			contentStr := strings.ToLower(string(content))
+
+			if strings.Contains(contentStr, "pika") || strings.Contains(contentStr, "aio-pika") {
+				if !seenServices["rabbitmq"] {
+					arch.Services = append(arch.Services, ServiceDependency{
+						Name:     "rabbitmq",
+						Type:     "message_queue",
+						Required: true,
+					})
+					seenServices["rabbitmq"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "boto3") || strings.Contains(contentStr, "minio") {
+				if !seenServices["minio"] {
+					arch.Services = append(arch.Services, ServiceDependency{
+						Name:     "minio",
+						Type:     "storage",
+						Required: true,
+					})
+					seenServices["minio"] = true
+				}
+			}
+		}
+	}
+
+	// Check Go modules for services
+	if pkg.FileExists(filepath.Join(dirPath, "go.mod")) {
+		content, err := pkg.ReadFile(filepath.Join(dirPath, "go.mod"))
+		if err == nil {
+			contentStr := string(content)
+
+			if strings.Contains(contentStr, "github.com/rabbitmq/amqp091-go") {
+				if !seenServices["rabbitmq"] {
+					arch.Services = append(arch.Services, ServiceDependency{
+						Name:     "rabbitmq",
+						Type:     "message_queue",
+						Required: true,
+					})
+					seenServices["rabbitmq"] = true
+				}
+			}
+
+			if strings.Contains(contentStr, "github.com/minio/minio-go") {
+				if !seenServices["minio"] {
+					arch.Services = append(arch.Services, ServiceDependency{
+						Name:     "minio",
+						Type:     "storage",
+						Required: true,
+					})
+					seenServices["minio"] = true
+				}
+			}
+		}
+	}
 }

@@ -151,7 +151,6 @@ SELECT
                 
                 -- Team & Organization Limits
                 'max_users', sp.max_users,
-                'max_team_members', sp.max_team_members,
                 'max_projects', sp.max_projects,
                 
                 -- Build Limits
@@ -242,6 +241,9 @@ GROUP BY u.id;
 
         const accountType = userData.oauth_accounts && userData.oauth_accounts.length > 0 ? userData.oauth_accounts[0].provider : 'email';
 
+        const requiredRoleLevelToEdit = 3;
+        const canEditCompany = userData.company?.role?.hierarchy_level <= requiredRoleLevelToEdit;
+
         return res.status(200).json({
             error: false,
             email: userData.email,
@@ -253,6 +255,7 @@ GROUP BY u.id;
             hasCompany: !!userData.company,
             companyName: userData.company?.name || null,
             companyRole: userData.company?.role,
+            canEditCompany: canEditCompany,
         });
     } catch (error: any) {
         logging.error('GET-USER-ACCOUNT-DATA', error.message);
