@@ -37,6 +37,11 @@ CREATE TABLE deployments (
     env_vars JSONB DEFAULT '{}', -- Non-sensitive environment variables
     secret_refs JSONB DEFAULT '[]', -- References to secrets stored securely
     
+    -- retries
+    retry_count INTEGER DEFAULT 0
+    last_retry_at TIMESTAMP
+    retry_errors JSONB DEFAULT '[]',
+
     -- Database connections
     database_connections JSONB DEFAULT '[]', -- Auto-provisioned database details
     
@@ -97,6 +102,15 @@ CREATE TABLE deployments (
     CHECK (status IN ('pending', 'deploying', 'active', 'failed', 'rolled_back', 'terminated')),
     CHECK (traffic_percentage >= 0 AND traffic_percentage <= 100)
 );
+
+CREATE INDEX IF NOT EXISTS idx_deployments_retry_count 
+ON deployments(retry_count) 
+WHERE status = 'failed' AND retry_count >= 5;
+
+ALTER TABLE deployments 
+ADD CONSTRAINT chk_deployments_retry_count 
+CHECK (retry_count >= 0 AND retry_count <= 10);
+
 
 CREATE UNIQUE INDEX ux_deployments_active_preview
 ON deployments (project_id, environment, branch)

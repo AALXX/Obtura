@@ -1,7 +1,7 @@
 'use client'
 import React, { useRef, useState } from 'react'
 import { Rocket, Settings, Activity, Database, Globe, GitBranch, Clock, CheckCircle2, XCircle, AlertCircle, Eye, Code, Server, Lock, RotateCcw, Play, Pause, Plus, Trash2, Copy, ExternalLink, TrendingUp, Zap, Shield, Layers, Package, Hammer, Upload, Calendar, Save, Loader2 } from 'lucide-react'
-import { Build, BuildStatus, ProjectData } from './Types/ProjectTypes'
+import { Build, BuildStatus, DeploymentConfig, ProjectData } from './Types/ProjectTypes'
 import EnvFileUpload from '../account/components/EnvFileUpload'
 import DialogCanvas from '@/common-components/DialogCanvas'
 import axios from 'axios'
@@ -9,6 +9,7 @@ import BuildDialog from './components/BuildDialog'
 import BuildLogsViewer from './components/BuildLogsViewer'
 import EnvVarsCard from './components/EnvVarCard'
 import { useBuildUpdates } from '@/hooks/useBuildUpdates'
+import DeployDialog from './components/DeployDialog'
 
 const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; services: { service_name: string; env_vars: Record<string, string> }[] }> = ({ projectData, accessToken, services }) => {
     const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'environment' | 'settings' | 'monitoring' | 'builds'>('overview')
@@ -37,6 +38,17 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     const [showEnvFileDialog, setShowEnvFileDialog] = useState(false)
 
     const [currentBuildId, setCurrentBuildId] = useState<string | null>(null)
+
+    // Deploy dialog state
+    const [showDeployDialog, setShowDeployDialog] = useState(false)
+    const [deployEnvironment, setDeployEnvironment] = useState('')
+    const [deploySource, setDeploySource] = useState<'build' | 'branch'>('build')
+    const [deploySelectedBuild, setDeploySelectedBuild] = useState('')
+    const [selectedBranch, setSelectedBranch] = useState(projectData.production?.branch || 'main')
+    const [showAdvanced, setShowAdvanced] = useState(false)
+    const [deploymentStrategy, setDeploymentStrategy] = useState(projectData.production?.deploymentStrategy || 'blue_green')
+    const [enableMonitoring, setEnableMonitoring] = useState(true)
+    const [autoScaling, setAutoScaling] = useState(false)
 
     const [builds, setBuilds] = useState<Build[]>(
         projectData.builds.map(build => ({
@@ -68,12 +80,29 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         setCurrentPage(page)
     }
 
-    const handleDeploy = (environment: string) => {
-        setIsDeploying(true)
-        setTimeout(() => {
+    const handleDeploy = async (config: DeploymentConfig) => {
+        try {
+            setIsDeploying(true)
+
+            const deployUrl = config.buildId ? `trigger-deploy?buildId=${config.buildId}` : `trigger-deploy`
+
+            const resp = await axios.post<{ buildId: string }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/${deployUrl}`, {
+                accessToken: accessToken,
+                projectId: projectData.id,
+                environment: config.environment,
+                strategy: config.strategy
+            })
+
+            if (resp.status !== 200) {
+                alert("There's an error in your deployment configuration")
+                setIsDeploying(false)
+                return
+            }
+
             setIsDeploying(false)
-            alert(`Deployment to ${environment} initiated!`)
-        }, 2000)
+        } catch (error) {
+            alert("There's an error in your deployment configuration")
+        }
     }
 
     const handleAddEnvVar = () => {
@@ -305,7 +334,13 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                 Build
                             </button>
 
-                            <button onClick={() => handleDeploy('production')} disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-50 cursor-pointer">
+                            <button
+                                disabled={isDeploying}
+                                onClick={() => {
+                                    setShowDeployDialog(true)
+                                }}
+                                className="flex cursor-pointer items-center gap-2 rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-50"
+                            >
                                 {isDeploying ? (
                                     <>
                                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
@@ -337,6 +372,13 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                     />
                 </DialogCanvas>
             )}
+
+            {showDeployDialog && (
+                <DialogCanvas closeDialog={() => setShowDeployDialog(false)}>
+                    <DeployDialog accessToken={accessToken} projectId={projectData.id} builds={projectData.builds} currentBranch={projectData.production.branch || 'main'} deploymentStrategy={projectData.production.deploymentStrategy || 'blue_green'} onDeploy={handleDeploy} onClose={() => setShowDeployDialog(false)} />
+                </DialogCanvas>
+            )}
+
             <div className="border-b border-zinc-800">
                 <div className="container mx-auto px-6">
                     <div className="flex gap-1">
@@ -354,6 +396,251 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             </div>
 
             <div className="container mx-auto px-6 py-8">
+                {activeTab === 'deployments' && (
+                    <div className="space-y-6">
+                        <div>
+                            <h2 className="text-xl font-semibold">Deployment Environments</h2>
+                            <p className="text-sm text-zinc-400">Manage and monitor your production and staging deployments</p>
+                        </div>
+
+                        {/* Production Environment */}
+                        {projectData.production.url && (
+                            <div className="space-y-6">
+                                <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-6">
+                                    <div className="mb-6 flex items-center justify-between">
+                                        <div className="flex items-center gap-4">
+                                            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-green-500/10">
+                                                <Globe className="text-green-500" size={24} />
+                                            </div>
+                                            <div>
+                                                <a href={`https://${projectData.production.url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-lg font-semibold">
+                                                    {projectData.production.url}
+                                                    <ExternalLink size={12} />
+                                                </a>
+                                                <div className="flex items-center gap-3">
+                                                    <h3 className="text-sm text-zinc-400 hover:text-white">Production</h3>
+                                                    <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${projectData.staging.status === 'active' ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'}`}>
+                                                        <CheckCircle2 size={12} />
+                                                        {projectData.production.status || 'Unknown'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <button className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
+                                                <Eye size={16} />
+                                                View Logs
+                                            </button>
+                                            <button disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                                                <RotateCcw size={16} />
+                                                Redeploy
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Deployment Strategy & Metrics */}
+                                    <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                                        <div className="rounded-lg bg-zinc-900/50 p-4">
+                                            <div className="text-sm text-zinc-400">Strategy</div>
+                                            <div className="font-semibold text-blue-400">{projectData.production.deploymentStrategy || 'N/A'}</div>
+                                        </div>
+                                        <div className="rounded-lg bg-zinc-900/50 p-4">
+                                            <div className="text-sm text-zinc-400">Traffic</div>
+                                            <div className="font-semibold">{projectData.production.trafficPercentage || 0}%</div>
+                                        </div>
+                                        <div className="rounded-lg bg-zinc-900/50 p-4">
+                                            <div className="text-sm text-zinc-400">Requests/min</div>
+                                            <div className="font-semibold">{projectData.production.currentRequestsPerMinute || 0}</div>
+                                        </div>
+                                        <div className="rounded-lg bg-zinc-900/50 p-4">
+                                            <div className="text-sm text-zinc-400">Response Time</div>
+                                            <div className="font-semibold">{projectData.production.avgResponseTime}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Strategy Details */}
+                                    {projectData.production.strategyDetails && (
+                                        <div className="mb-6 rounded-lg border border-zinc-700 bg-zinc-900/30 p-4">
+                                            <h4 className="mb-3 font-semibold">Deployment Strategy Details</h4>
+                                            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                                <div>
+                                                    <div className="text-zinc-400">Phase</div>
+                                                    <div className="font-medium capitalize">{projectData.production.strategyDetails.currentPhase}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-zinc-400">Active Group</div>
+                                                    <div className="font-medium">{projectData.production.strategyDetails.activeGroup || 'None'}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-zinc-400">Total Replicas</div>
+                                                    <div className="font-medium">{projectData.production.strategyDetails.totalReplicas}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-zinc-400">Healthy Replicas</div>
+                                                    <div className="font-medium text-green-500">{projectData.production.strategyDetails.healthyReplicas}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Containers */}
+                                    <div className="mb-6">
+                                        <h4 className="mb-3 font-semibold">Containers ({projectData.production.totalContainers})</h4>
+                                        <div className="space-y-3">
+                                            {projectData.production.containers.map(container => (
+                                                <div key={container.id} className="rounded-lg border border-zinc-700 bg-zinc-900/50 p-4">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className={`h-3 w-3 rounded-full ${container.healthStatus === 'healthy' ? 'bg-green-500' : container.healthStatus === 'unhealthy' ? 'bg-red-500' : 'bg-yellow-500'}`}></div>
+                                                            <div>
+                                                                <div className="font-medium">{container.name}</div>
+                                                                <div className="text-xs text-zinc-400">ID: {container.id.slice(0, 8)}...</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-4 text-sm">
+                                                            <span className={`rounded-full px-2 py-1 text-xs ${container.isActive ? 'bg-green-500/10 text-green-500' : 'bg-zinc-500/10 text-zinc-500'}`}>{container.status}</span>
+                                                            <span className="text-zinc-400">{container.deploymentGroup}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-3 grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                                        <div>
+                                                            <div className="text-zinc-400">CPU Usage</div>
+                                                            <div className="font-medium">{container.cpuUsage ? `${container.cpuUsage}%` : 'N/A'}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-zinc-400">Memory</div>
+                                                            <div className="font-medium">{container.memoryUsage ? `${container.memoryUsage}MB` : 'N/A'}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-zinc-400">Started</div>
+                                                            <div className="font-medium">{new Date(container.startedAt).toLocaleString()}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-zinc-400">Health</div>
+                                                            <div className={`font-medium capitalize ${container.healthStatus === 'healthy' ? 'text-green-500' : container.healthStatus === 'unhealthy' ? 'text-red-500' : 'text-yellow-500'}`}>{container.healthStatus}</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Alerts */}
+                                    {projectData.production.unresolvedAlerts.length > 0 && (
+                                        <div className="mb-6">
+                                            <h4 className="mb-3 font-semibold text-red-400">Unresolved Alerts ({projectData.production.unresolvedAlertCount})</h4>
+                                            <div className="space-y-2">
+                                                {projectData.production.unresolvedAlerts.slice(0, 3).map(alert => (
+                                                    <div key={alert.id} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                                                        <div className="flex items-center gap-3">
+                                                            <AlertCircle className="text-red-500" size={16} />
+                                                            <div className="flex-1">
+                                                                <div className="text-sm font-medium">{alert.message}</div>
+                                                                <div className="text-xs text-zinc-400">{new Date(alert.timestamp).toLocaleString()}</div>
+                                                            </div>
+                                                            <span className={`rounded-full px-2 py-1 text-xs ${alert.severity === 'critical' ? 'bg-red-500/10 text-red-500' : alert.severity === 'high' ? 'bg-orange-500/10 text-orange-500' : alert.severity === 'medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                                                                {alert.severity}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Deployment Info */}
+                                    <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                        <div>
+                                            <div className="text-zinc-400">Last Deployment</div>
+                                            <div className="font-medium">{projectData.production.lastDeployment}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-zinc-400">Branch</div>
+                                            <div className="font-medium">{projectData.production.branch || 'N/A'}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-zinc-400">Build Time</div>
+                                            <div className="font-medium">{projectData.production.buildTime || 'N/A'}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-zinc-400">Framework</div>
+                                            <div className="font-medium">{projectData.production.framework || 'N/A'}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Staging Environment */}
+                        {projectData.staging.url && (
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-6">
+                                <div className="mb-6 flex items-center justify-between">
+                                    <div className="flex items-center gap-4">
+                                        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-500/10">
+                                            <Server className="text-blue-500" size={24} />
+                                        </div>
+                                        <div>
+                                            {projectData.staging.url && (
+                                                <a href={`https://${projectData.staging.url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-lg font-semibold">
+                                                    {projectData.staging.url}
+                                                    <ExternalLink size={18} />
+                                                </a>
+                                            )}
+                                            <div className="mb-1 flex items-center gap-3">
+                                                <h3 className="text-sm text-zinc-400 hover:text-white">Staging</h3>
+                                                <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${projectData.staging.status === 'active' ? 'bg-blue-500/10 text-blue-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
+                                                    <CheckCircle2 size={10} />
+                                                    {projectData.staging.status || 'Inactive'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
+                                            <Rocket size={16} />
+                                            Deploy
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                    <div>
+                                        <div className="text-zinc-400">Last Deployment</div>
+                                        <div className="font-medium">{projectData.staging.lastDeployment || 'Never'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-zinc-400">Branch</div>
+                                        <div className="font-medium">{projectData.staging.branch || 'N/A'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-zinc-400">Build Time</div>
+                                        <div className="font-medium">{projectData.staging.buildTime || 'N/A'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-zinc-400">Framework</div>
+                                        <div className="font-medium">{projectData.staging.framework || 'N/A'}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* No Deployments State */}
+                        {!projectData.production.url && !projectData.staging.url && (
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-12 text-center">
+                                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900">
+                                    <Rocket className="text-zinc-600" size={32} />
+                                </div>
+                                <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Active Deployments</h3>
+                                <p className="mb-6 text-sm text-zinc-500">Deploy your project to production or staging to see deployment details here</p>
+                                <button className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-medium text-white hover:bg-orange-600">
+                                    <Rocket size={18} />
+                                    Deploy to Production
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {activeTab === 'overview' && (
                     <div className="space-y-6">
                         {projectData.isMonorepo && projectData.frameworks && projectData.frameworks.length > 0 && (
@@ -444,7 +731,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                     </div>
                                     <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Deployments Yet</h3>
                                     <p className="mb-6 text-sm text-zinc-500">Get started by deploying your project to production or staging</p>
-                                    <button onClick={() => handleDeploy('production')} className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-medium text-white hover:bg-orange-600">
+                                    <button className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-medium text-white hover:bg-orange-600">
                                         <Rocket size={18} />
                                         Deploy Now
                                     </button>
@@ -526,7 +813,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                     </div>
                                                 </div>
 
-                                                <button onClick={() => handleDeploy('staging')} className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600">
+                                                <button className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
                                                     <Rocket size={16} />
                                                     Deploy
                                                 </button>
@@ -686,88 +973,220 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                             <p className="text-sm text-zinc-400">Built-in observability with zero setup required</p>
                         </div>
 
-                        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                <h3 className="mb-4 font-semibold">Error Tracking</h3>
-                                <div className="space-y-3">
-                                    <div className="flex items-center justify-between rounded-lg bg-red-500/5 p-3">
-                                        <div className="flex items-center gap-3">
-                                            <XCircle className="text-red-500" size={20} />
-                                            <div>
-                                                <div className="text-sm font-medium">TypeError: Cannot read property</div>
-                                                <div className="text-xs text-zinc-400">12 occurrences • 2h ago</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center justify-between rounded-lg bg-yellow-500/5 p-3">
-                                        <div className="flex items-center gap-3">
-                                            <AlertCircle className="text-yellow-500" size={20} />
-                                            <div>
-                                                <div className="text-sm font-medium">Slow database query detected</div>
-                                                <div className="text-xs text-zinc-400">3 occurrences • 5h ago</div>
-                                            </div>
-                                        </div>
-                                    </div>
+                        {/* Key Metrics Overview */}
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
+                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
+                                    <Activity size={16} />
+                                    Uptime
                                 </div>
+                                <div className="text-2xl font-bold text-green-500">{projectData.metrics.uptime}</div>
                             </div>
 
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                <h3 className="mb-4 font-semibold">Performance Metrics</h3>
-                                <div className="space-y-4">
-                                    <div>
-                                        <div className="mb-1 flex justify-between text-sm">
-                                            <span className="text-zinc-400">CPU Usage</span>
-                                            <span className="font-medium">24%</span>
-                                        </div>
-                                        <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                            <div className="h-full w-1/4 bg-green-500"></div>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <div className="mb-1 flex justify-between text-sm">
-                                            <span className="text-zinc-400">Memory Usage</span>
-                                            <span className="font-medium">68%</span>
-                                        </div>
-                                        <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                            <div className="h-full w-2/3 bg-blue-500"></div>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <div className="mb-1 flex justify-between text-sm">
-                                            <span className="text-zinc-400">Disk Usage</span>
-                                            <span className="font-medium">45%</span>
-                                        </div>
-                                        <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                            <div className="h-full w-1/2 bg-purple-500"></div>
-                                        </div>
-                                    </div>
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
+                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
+                                    <Zap size={16} />
+                                    Response Time
                                 </div>
+                                <div className="text-2xl font-bold">{projectData.metrics.avgResponseTime}</div>
+                            </div>
+
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
+                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
+                                    <TrendingUp size={16} />
+                                    Requests (24h)
+                                </div>
+                                <div className="text-2xl font-bold">{projectData.metrics.requests24h}</div>
+                            </div>
+
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
+                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
+                                    <AlertCircle size={16} />
+                                    Errors (24h)
+                                </div>
+                                <div className="text-2xl font-bold text-yellow-500">{projectData.metrics.errors24h}</div>
                             </div>
                         </div>
 
+                        {/* Environment-Specific Monitoring */}
+                        {projectData.production.url && (
+                            <div className="space-y-6">
+                                <h3 className="text-lg font-semibold">Production Environment</h3>
+
+                                {/* Production Metrics */}
+                                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
+                                        <h4 className="mb-4 font-semibold">Performance Metrics</h4>
+                                        <div className="space-y-4">
+                                            <div>
+                                                <div className="mb-1 flex justify-between text-sm">
+                                                    <span className="text-zinc-400">Requests/min</span>
+                                                    <span className="font-medium">{projectData.production.currentRequestsPerMinute || 0}</span>
+                                                </div>
+                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                                                    <div className="h-full bg-blue-500" style={{ width: `${Math.min(((projectData.production.currentRequestsPerMinute || 0) / 100) * 100, 100)}%` }}></div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="mb-1 flex justify-between text-sm">
+                                                    <span className="text-zinc-400">Response Time</span>
+                                                    <span className="font-medium">{projectData.production.avgResponseTime}</span>
+                                                </div>
+                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                                                    <div className="h-full bg-green-500" style={{ width: '85%' }}></div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="mb-1 flex justify-between text-sm">
+                                                    <span className="text-zinc-400">Error Rate</span>
+                                                    <span className="font-medium">{projectData.production.errorRate}</span>
+                                                </div>
+                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                                                    <div className="h-full bg-red-500" style={{ width: '5%' }}></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
+                                        <h4 className="mb-4 font-semibold">Container Health</h4>
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-zinc-400">Total Containers</span>
+                                                <span className="font-medium">{projectData.production.totalContainers}</span>
+                                            </div>
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-zinc-400">Healthy</span>
+                                                <span className="font-medium text-green-500">{projectData.production.healthyContainers}</span>
+                                            </div>
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-zinc-400">Unhealthy</span>
+                                                <span className="font-medium text-red-500">{projectData.production.unhealthyContainers}</span>
+                                            </div>
+                                            <div className="mt-4">
+                                                <div className="mb-2 text-sm text-zinc-400">Health Status</div>
+                                                <div className="flex items-center gap-2">
+                                                    <div className={`h-3 w-3 rounded-full ${projectData.production.healthyContainers === projectData.production.totalContainers ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
+                                                    <span className="text-sm font-medium">{projectData.production.healthyContainers === projectData.production.totalContainers ? 'All Healthy' : 'Issues Detected'}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Active Alerts */}
+                                {projectData.production.unresolvedAlerts.length > 0 && (
+                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
+                                        <h4 className="mb-4 font-semibold text-red-400">Active Alerts ({projectData.production.unresolvedAlertCount})</h4>
+                                        <div className="space-y-3">
+                                            {projectData.production.unresolvedAlerts.map(alert => (
+                                                <div key={alert.id} className={`rounded-lg border p-3 ${alert.severity === 'critical' ? 'border-red-500/20 bg-red-500/5' : alert.severity === 'high' ? 'border-orange-500/20 bg-orange-500/5' : alert.severity === 'medium' ? 'border-yellow-500/20 bg-yellow-500/5' : 'border-blue-500/20 bg-blue-500/5'}`}>
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-3">
+                                                            <AlertCircle className={`${alert.severity === 'critical' ? 'text-red-500' : alert.severity === 'high' ? 'text-orange-500' : alert.severity === 'medium' ? 'text-yellow-500' : 'text-blue-500'}`} size={20} />
+                                                            <div>
+                                                                <div className="text-sm font-medium">{alert.message}</div>
+                                                                <div className="text-xs text-zinc-400">{new Date(alert.timestamp).toLocaleString()}</div>
+                                                            </div>
+                                                        </div>
+                                                        <span className={`rounded-full px-2 py-1 text-xs font-medium ${alert.severity === 'critical' ? 'bg-red-500/10 text-red-500' : alert.severity === 'high' ? 'bg-orange-500/10 text-orange-500' : alert.severity === 'medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                                                            {alert.severity}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Staging Monitoring (if applicable) */}
+                        {projectData.staging.url && projectData.staging.status === 'active' && (
+                            <div className="space-y-6">
+                                <h3 className="text-lg font-semibold">Staging Environment</h3>
+                                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
+                                        <h4 className="mb-4 font-semibold">Performance Metrics</h4>
+                                        <div className="space-y-4">
+                                            <div>
+                                                <div className="mb-1 flex justify-between text-sm">
+                                                    <span className="text-zinc-400">Requests/min</span>
+                                                    <span className="font-medium">{projectData.staging.currentRequestsPerMinute || 0}</span>
+                                                </div>
+                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                                                    <div className="h-full bg-blue-500" style={{ width: `${Math.min(((projectData.staging.currentRequestsPerMinute || 0) / 50) * 100, 100)}%` }}></div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="mb-1 flex justify-between text-sm">
+                                                    <span className="text-zinc-400">Response Time</span>
+                                                    <span className="font-medium">{projectData.staging.avgResponseTime}</span>
+                                                </div>
+                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                                                    <div className="h-full bg-green-500" style={{ width: '90%' }}></div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="mb-1 flex justify-between text-sm">
+                                                    <span className="text-zinc-400">Error Rate</span>
+                                                    <span className="font-medium">{projectData.staging.errorRate}</span>
+                                                </div>
+                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                                                    <div className="h-full bg-red-500" style={{ width: '2%' }}></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
+                                        <h4 className="mb-4 font-semibold">Container Health</h4>
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-zinc-400">Total Containers</span>
+                                                <span className="font-medium">{projectData.staging.totalContainers}</span>
+                                            </div>
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-zinc-400">Healthy</span>
+                                                <span className="font-medium text-green-500">{projectData.staging.healthyContainers}</span>
+                                            </div>
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-zinc-400">Unhealthy</span>
+                                                <span className="font-medium text-red-500">{projectData.staging.unhealthyContainers}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Logs Section */}
                         <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                            <h3 className="mb-4 font-semibold">Recent Logs</h3>
+                            <h4 className="mb-4 font-semibold">Recent Application Logs</h4>
                             <div className="space-y-2 font-mono text-xs">
                                 <div className="flex items-start gap-3 text-zinc-400">
                                     <span className="text-green-500">[INFO]</span>
-                                    <span className="text-zinc-500">2025-12-31 14:23:45</span>
-                                    <span>GET /api/products - 200 OK (142ms)</span>
+                                    <span className="text-zinc-500">{new Date().toISOString().slice(0, 19).replace('T', ' ')}</span>
+                                    <span>Application started successfully on port 3000</span>
                                 </div>
                                 <div className="flex items-start gap-3 text-zinc-400">
-                                    <span className="text-green-500">[INFO]</span>
-                                    <span className="text-zinc-500">2025-12-31 14:23:42</span>
-                                    <span>Database connection established</span>
+                                    <span className="text-blue-500">[DEBUG]</span>
+                                    <span className="text-zinc-500">{new Date(Date.now() - 300000).toISOString().slice(0, 19).replace('T', ' ')}</span>
+                                    <span>Database connection pool initialized</span>
                                 </div>
                                 <div className="flex items-start gap-3 text-zinc-400">
                                     <span className="text-yellow-500">[WARN]</span>
-                                    <span className="text-zinc-500">2025-12-31 14:23:38</span>
-                                    <span>Slow query detected: SELECT * FROM orders (2.3s)</span>
+                                    <span className="text-zinc-500">{new Date(Date.now() - 600000).toISOString().slice(0, 19).replace('T', ' ')}</span>
+                                    <span>High memory usage detected: 85%</span>
                                 </div>
                                 <div className="flex items-start gap-3 text-zinc-400">
-                                    <span className="text-red-500">[ERROR]</span>
-                                    <span className="text-zinc-500">2025-12-31 14:23:35</span>
-                                    <span>Failed to process payment: stripe_error</span>
+                                    <span className="text-green-500">[INFO]</span>
+                                    <span className="text-zinc-500">{new Date(Date.now() - 900000).toISOString().slice(0, 19).replace('T', ' ')}</span>
+                                    <span>Health check passed for container blue-0</span>
                                 </div>
+                            </div>
+                            <div className="mt-4 flex justify-center">
+                                <button className="text-sm text-blue-400 hover:text-blue-300">View Full Logs →</button>
                             </div>
                         </div>
                     </div>
@@ -790,7 +1209,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                             {projectData.isMonorepo ? (
                                                 <>
                                                     <Layers className="text-purple-500" size={16} />
-                                                    <span>Monorepo ({projectData.frameworks.length} applications)</span>
+                                                    <span>Monorepo ({projectData.frameworks!.length} applications)</span>
                                                 </>
                                             ) : (
                                                 <>
@@ -802,7 +1221,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                     </div>
 
                                     {projectData.isMonorepo &&
-                                        projectData.frameworks.map((framework, idx) => (
+                                        projectData.frameworks!.map((framework, idx) => (
                                             <div key={idx} className="rounded border border-zinc-800 bg-zinc-900/50 p-4">
                                                 <div className="mb-3 font-medium text-purple-400">
                                                     {framework.Name} - {framework.Path}

@@ -1,113 +1,125 @@
 package security
 
 import (
-	"github.com/docker/docker/api/types/container"
+	"time"
 	"github.com/docker/go-units"
-	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-type SandboxConfig struct {
-	CPUQuota     int64  
-	MemoryLimit  int64  
-	PidsLimit    int64  
-	NoNewPrivs   bool   
-	ReadOnlyRoot bool   
-	NetworkMode  string 
+// DeploymentSandboxConfig defines security constraints for deployed containers
+type DeploymentSandboxConfig struct {
+	// Resource Limits
+	CPUQuota     int64
+	MemoryLimit  int64
+	PidsLimit    int64
+	StorageLimit int64
+
+	// Network Security
+	NetworkMode    string   // "none", "bridge", "obtura_dev"
+	NetworkName    string   // Actual network name to connect to
+	AllowedPorts   []int
+	DNSServers     []string
+	ExposeToHost   bool     // Whether to expose ports to host
+	HostPortStart  int      // Starting port for host bindings
+
+	// Security Options
+	NoNewPrivs    bool
+	ReadOnlyRoot  bool
+	MaskedPaths   []string
+	ReadOnlyPaths []string
+	
+
+	// Runtime Options
+	Environment    string
+	HealthCheckURL string
+	StartupTimeout time.Duration
+	
+	// Traefik Integration
+	EnableTraefik bool
+	TraefikHost   string // e.g., "project-id.s3rbvn.org"
 }
 
-func CreateSecureBuildContainer(config SandboxConfig) (*container.Config, *container.HostConfig) {
-	containerConfig := &container.Config{
-		User: "1000:1000", // Non-root user
-		Labels: map[string]string{
-			"obtura.service": "build",
-			"obtura.sandbox": "enabled",
+// GetDefaultDeploymentConfig returns secure defaults based on plan tier
+func GetDefaultDeploymentConfig(planTier string, environment string) DeploymentSandboxConfig {
+	baseConfig := DeploymentSandboxConfig{
+		NoNewPrivs:     true,
+		ReadOnlyRoot:   true,
+		NetworkMode:    "obtura_dev",        // Use shared network
+		NetworkName:    "obtura_dev",        // Explicit network name
+		Environment:    environment,
+		HealthCheckURL: "/health",
+		StartupTimeout: 120 * time.Second,
+		DNSServers:     []string{"1.1.1.1", "1.0.0.1"},
+		ExposeToHost:   false,                // Enable host port exposure
+		HostPortStart:  9100,                // Start assigning from port 9000
+		EnableTraefik:  true,                // Enable Traefik routing
+		TraefikHost:    "",                  // Will be set per deployment
+
+		// Default security hardening
+		MaskedPaths: []string{
+			"/proc/asound",
+			"/proc/acpi",
+			"/proc/kcore",
+			"/proc/keys",
+			"/proc/latency_stats",
+			"/proc/timer_list",
+			"/proc/timer_stats",
+			"/proc/sched_debug",
+			"/proc/scsi",
+			"/sys/firmware",
+			"/sys/devices/virtual/powercap",
+		},
+		ReadOnlyPaths: []string{
+			"/proc/bus",
+			"/proc/fs",
+			"/proc/irq",
+			"/proc/sys",
+			"/proc/sysrq-trigger",
 		},
 	}
 
-	hostConfig := &container.HostConfig{
-		// CPU limits
-		Resources: container.Resources{
-			CPUQuota:  config.CPUQuota,     // 2 cores = 200000
-			CPUPeriod: 100000,              // 100ms period
-			Memory:    config.MemoryLimit,  // 8GB = 8589934592
-			MemorySwap: config.MemoryLimit, // No swap
-			PidsLimit:  &config.PidsLimit,  // Max 512 processes
-			Ulimits: []*units.Ulimit{
-				{
-					Name: "nofile",
-					Soft: 1024,
-					Hard: 1024,
-				},
-				{
-					Name: "nproc",
-					Soft: 512,
-					Hard: 512,
-				},
-			},
-		},
+	// Adjust resources based on plan tier
+	switch planTier {
+	case "starter":
+		baseConfig.CPUQuota = 100000
+		baseConfig.MemoryLimit = 536870912
+		baseConfig.PidsLimit = 128
+		baseConfig.StorageLimit = 5 * units.GiB
+		baseConfig.AllowedPorts = []int{8080}
 
-		SecurityOpt: []string{
-			"no-new-privileges:true",
-			"seccomp=unconfined", // Or use custom seccomp profile
-			"apparmor=docker-default",
-		},
+	case "team":
+		baseConfig.CPUQuota = 200000
+		baseConfig.MemoryLimit = 1073741824
+		baseConfig.PidsLimit = 256
+		baseConfig.StorageLimit = 20 * units.GiB
+		baseConfig.AllowedPorts = []int{8080, 8443}
 
-		// Capabilities (drop all, add only what's needed)
-		CapDrop: []string{"ALL"},
-		CapAdd: []string{
-			"CHOWN",
-			"DAC_OVERRIDE",
-			"SETGID",
-			"SETUID",
-		},
+	case "business":
+		baseConfig.CPUQuota = 400000
+		baseConfig.MemoryLimit = 2147483648
+		baseConfig.PidsLimit = 512
+		baseConfig.StorageLimit = 50 * units.GiB
+		baseConfig.AllowedPorts = []int{8080, 8443, 9090}
 
-		NetworkMode: container.NetworkMode(config.NetworkMode),
+	case "enterprise":
+		baseConfig.CPUQuota = 800000
+		baseConfig.MemoryLimit = 4294967296
+		baseConfig.PidsLimit = 1024
+		baseConfig.StorageLimit = 100 * units.GiB
+		baseConfig.AllowedPorts = []int{8080, 8443, 9090, 3000}
 
-		Privileged: false,
-
-		// Read-only root filesystem
-		ReadonlyRootfs: config.ReadOnlyRoot,
-
-		// Tmpfs mounts for writable directories
-		Tmpfs: map[string]string{
-			"/tmp":     "rw,noexec,nosuid,size=1g",
-			"/var/tmp": "rw,noexec,nosuid,size=1g",
-		},
-
-		// Log configuration
-		LogConfig: container.LogConfig{
-			Type: "json-file",
-			Config: map[string]string{
-				"max-size": "10m",
-				"max-file": "3",
-			},
-		},
+	default:
+		return GetDefaultDeploymentConfig("starter", environment)
 	}
 
-	return containerConfig, hostConfig
-}
-
-func ApplySeccompProfile() *specs.LinuxSeccomp {
-	return &specs.LinuxSeccomp{
-		DefaultAction: specs.ActErrno,
-		Architectures: []specs.Arch{
-			specs.ArchX86_64,
-			specs.ArchX86,
-			specs.ArchX32,
-		},
-		Syscalls: []specs.LinuxSyscall{
-			{Names: []string{"read", "write", "open", "close", "openat"}, Action: specs.ActAllow},
-			{Names: []string{"stat", "fstat", "lstat", "newfstatat"}, Action: specs.ActAllow},
-			{Names: []string{"mmap", "munmap", "mprotect", "mremap"}, Action: specs.ActAllow},
-			{Names: []string{"brk", "exit", "exit_group"}, Action: specs.ActAllow},
-			{Names: []string{"clone", "fork", "vfork", "execve"}, Action: specs.ActAllow},
-			{Names: []string{"wait4", "waitid"}, Action: specs.ActAllow},
-			{Names: []string{"getpid", "getppid", "getuid", "getgid"}, Action: specs.ActAllow},
-
-			{Names: []string{"ptrace", "process_vm_readv", "process_vm_writev"}, Action: specs.ActKill},
-			{Names: []string{"kexec_load", "kexec_file_load"}, Action: specs.ActKill},
-			{Names: []string{"create_module", "init_module", "finit_module", "delete_module"}, Action: specs.ActKill},
-			{Names: []string{"iopl", "ioperm", "ioprio_set"}, Action: specs.ActKill},
-		},
+	// Production environments get stricter security
+	if environment == "production" {
+		baseConfig.ReadOnlyRoot = true
+		baseConfig.StartupTimeout = 180 * time.Second
+	} else {
+		baseConfig.StartupTimeout = 60 * time.Second
+		// Development can be less restrictive
+		baseConfig.ReadOnlyRoot = false
 	}
+
+	return baseConfig
 }

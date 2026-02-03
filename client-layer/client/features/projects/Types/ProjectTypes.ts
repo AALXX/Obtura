@@ -10,7 +10,7 @@ export interface ProjectData {
     teamName: string
     framework: string
     isMonorepo: boolean
-    frameworks: FrameworkConfig[]
+    frameworks: FrameworkConfig[] | null
     status: 'active' | 'inactive' | 'paused' | string
     production: EnvironmentDeployment
     staging: EnvironmentDeployment
@@ -41,14 +41,66 @@ export interface FrameworkConfig {
     BuildCmd: string
 }
 
+export interface Container {
+    id: string
+    name: string
+    status: string
+    healthStatus: string
+    isActive: boolean
+    deploymentGroup: string
+    cpuUsage: number | null
+    memoryUsage: number | null
+    memoryLimit: number | null
+    startedAt: string
+}
+
+export interface StrategyDetails {
+    strategy: string
+    currentPhase: string
+    activeGroup: string
+    standbyGroup: string
+    healthyReplicas: number
+    unhealthyReplicas: number
+    totalReplicas: number
+    canaryTrafficPercentage: number
+    canaryAnalysisPassed: boolean | null
+}
+
+export interface Alert {
+    id: string
+    type: string
+    message: string
+    severity: 'low' | 'medium' | 'high' | 'critical'
+    timestamp: string
+    resolved: boolean
+}
+
 export interface EnvironmentDeployment {
     url: string | null
     status: string | null
+    deploymentStrategy: string | null
+    replicaCount: number | null
+    autoScalingEnabled: boolean | null
+    instanceType: string | null
+    trafficPercentage: number | null
+    currentRequestsPerMinute: number | null
+    avgResponseTime: string
+    errorRate: string
+    sslEnabled: boolean | null
+    monitoringEnabled: boolean | null
+    deploymentTrigger: string | null
     lastDeployment: string
     commit: string | null
     branch: string | null
     buildTime: string | null
     framework: string | null
+    containers: Container[]
+    totalContainers: number
+    healthyContainers: number
+    unhealthyContainers: number
+    strategyDetails: StrategyDetails | null
+    unresolvedAlerts: Alert[]
+    unresolvedAlertCount: number
 }
 
 export interface PreviewDeployment {
@@ -89,4 +141,17 @@ export interface Build {
     framework?: string
     initiatedBy?: string
     errorMessage?: string
+}
+
+
+
+export interface DeploymentConfig {
+    environment: 'production' | 'staging'
+    source: 'build' | 'branch'
+    buildId?: string
+    branch?: string
+    commit?: string
+    strategy?: string
+    enableMonitoring?: boolean
+    autoScaling?: boolean
 }

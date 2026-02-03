@@ -60,9 +60,18 @@ router.post('/env-config', upload.single('envFile'), body('projectId').not().isE
 router.put('/update-env-config', body('projectId').not().isEmpty(), body('services'), body('accessToken').not().isEmpty(), ProjectsServices.UpdateEnvVariables);
 
 router.post('/trigger-build', body('projectId').not().isEmpty(), body('branch').not(), body('accessToken').not().isEmpty(), ProjectsServices.TriggerBuild);
-router.post('/trigger-deploy', body('projectId').not().isEmpty(), body('branch').not(), body('accessToken').not().isEmpty(), query('buildId').optional(), ProjectsServices.TriggerDeploy);
-
 router.delete('/delete-build/:buildId', body('projectId').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.DeleteBuild);
+
+router.post(
+    '/trigger-deploy',
+    body('projectId').not().isEmpty(),
+    body('branch').not(),
+    body('accessToken').not().isEmpty(),
+    query('buildId').optional(),
+    body('environment').optional(),
+    body('strategy').optional().isIn(['blue_green', 'rolling', 'canary']).withMessage('Invalid deployment strategy'),
+    ProjectsServices.TriggerDeploy,
+);
 
 router.get('/get-project-details/:projectId/:accessToken', param('projectId').not().isEmpty(), param('accessToken').not().isEmpty(), ProjectsServices.GetProjectDetails);
 

@@ -468,6 +468,9 @@ func (qs *QuotaService) GetFreeDeploymentQuota() DeploymentQuota {
 	}
 }
 
+
+
+
 // CheckQuotaBeforeBuild validates if a build can proceed based on current usage
 func (qs *QuotaService) CheckQuotaBeforeBuild(ctx context.Context, companyID string, buildSize int64, servicesCount int) error {
 	// Get current usage from subscriptions table

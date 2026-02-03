@@ -86,9 +86,9 @@ type DeploymentLimits struct {
 	MaxPerMonth   int
 }
 
-func (rl *RateLimiter) CheckAndIncrementDeploymentLimit(ctx context.Context, projectID string, limits DeploymentLimits) error {
-	// Check concurrent deployments
-	concurrentKey := fmt.Sprintf("deployments:concurrent:%s", projectID)
+func (rl *RateLimiter) CheckAndIncrementDeploymentLimit(ctx context.Context, companyID string, limits DeploymentLimits) error {
+	// Check concurrent deployments at COMPANY level
+	concurrentKey := fmt.Sprintf("deployments:concurrent:company:%s", companyID)
 	concurrent, err := rl.redis.Get(ctx, concurrentKey).Int()
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("failed to check concurrent deployments: %w", err)
@@ -98,8 +98,8 @@ func (rl *RateLimiter) CheckAndIncrementDeploymentLimit(ctx context.Context, pro
 		return fmt.Errorf("concurrent deployment limit reached (%d/%d)", concurrent, limits.MaxConcurrent)
 	}
 
-	// Check monthly limit
-	monthlyKey := fmt.Sprintf("deployments:monthly:%s:%s", projectID, time.Now().Format("200601"))
+	// Check monthly limit at COMPANY level
+	monthlyKey := fmt.Sprintf("deployments:monthly:company:%s:%s", companyID, time.Now().Format("200601"))
 	monthlyCount, err := rl.redis.Get(ctx, monthlyKey).Int()
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("failed to check monthly deployments: %w", err)
@@ -113,10 +113,10 @@ func (rl *RateLimiter) CheckAndIncrementDeploymentLimit(ctx context.Context, pro
 	pipe := rl.redis.Pipeline()
 
 	pipe.Incr(ctx, concurrentKey)
-	pipe.Expire(ctx, concurrentKey, 1*time.Hour)
+	pipe.Expire(ctx, concurrentKey, 2*time.Hour) // Give some buffer
 
 	pipe.Incr(ctx, monthlyKey)
-	pipe.Expire(ctx, monthlyKey, 60*24*time.Hour) // ~2 months retention
+	pipe.Expire(ctx, monthlyKey, 60*24*time.Hour)
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
@@ -126,8 +126,8 @@ func (rl *RateLimiter) CheckAndIncrementDeploymentLimit(ctx context.Context, pro
 	return nil
 }
 
-func (rl *RateLimiter) DecrementConcurrentDeployments(ctx context.Context, projectID string) error {
-	concurrentKey := fmt.Sprintf("deployments:concurrent:%s", projectID)
+func (rl *RateLimiter) DecrementConcurrentDeployments(ctx context.Context, companyID string) error {
+	concurrentKey := fmt.Sprintf("deployments:concurrent:company:%s", companyID)
 	return rl.redis.Decr(ctx, concurrentKey).Err()
 }
 

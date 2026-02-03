@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"deploy-service/internal/logger"
+	deployment_logger "deploy-service/internal/logger"
 	"deploy-service/internal/security"
 	"deploy-service/internal/storage"
 	"deploy-service/internal/worker"
@@ -91,29 +91,34 @@ func main() {
 		})
 	})
 
-	r.GET("/api/builds/:buildId/logs/stream", logger.HandleBuildLogsSSE)
+	r.GET("/api/deployments/:deploymentId/logs/stream", deployment_logger.HandleDeploymentLogsSSE)
 
-	r.GET("/api/builds/:buildId/logs", func(c *gin.Context) {
-		buildID := c.Param("buildId")
+	// Historical deployment logs endpoint
+	r.GET("/api/deployments/:deploymentId/logs", func(c *gin.Context) {
+		deploymentID := c.Param("deploymentId")
 
-		rows, err := db.Query(
-			"SELECT log_type, message, created_at FROM build_logs WHERE build_id = $1 ORDER BY created_at ASC",
-			buildID,
-		)
+		// Fetch deployment events
+		rows, err := db.Query(`
+        SELECT event_type, event_message, severity, created_at 
+        FROM deployment_events 
+        WHERE deployment_id = $1 
+        ORDER BY created_at ASC
+    `, deploymentID)
 		if err != nil {
-			c.JSON(500, gin.H{"error": "Failed to fetch logs"})
+			c.JSON(500, gin.H{"error": "Failed to fetch deployment logs"})
 			return
 		}
 		defer rows.Close()
 
 		var logs []gin.H
 		for rows.Next() {
-			var logType, message string
+			var eventType, message, severity string
 			var createdAt interface{}
-			rows.Scan(&logType, &message, &createdAt)
+			rows.Scan(&eventType, &message, &severity, &createdAt)
 			logs = append(logs, gin.H{
-				"type":      logType,
+				"type":      severity,
 				"message":   message,
+				"eventType": eventType,
 				"timestamp": createdAt,
 			})
 		}

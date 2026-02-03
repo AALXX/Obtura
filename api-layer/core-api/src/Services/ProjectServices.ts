@@ -579,7 +579,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
     }
 
     try {
-        const { accessToken, projectId, environment = 'production' } = req.body;
+        const { accessToken, projectId, environment = 'production', strategy } = req.body;
         const buildId = req.query.buildId as string | undefined;
 
         const userID = await getUserIdFromSessionToken(accessToken);
@@ -644,24 +644,29 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                     errmsg: 'Build has no image tags. Cannot deploy.',
                 });
             }
-
             let domain = null;
             let subdomain = null;
 
             if (environment === 'production') {
-                domain = `${project.slug}.obtura.app`;
+                // Production: projectslug.s3rbvn.org
+                domain = `${project.slug}.s3rbvn.org`;
             } else if (environment === 'staging') {
+                // Staging: projectslug-staging.s3rbvn.org
                 subdomain = 'staging';
-                domain = `staging.${project.slug}.obtura.app`;
+                domain = `${project.slug}-staging.s3rbvn.org`;
             } else if (environment === 'preview') {
-                subdomain = existingBuild.branch.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-                domain = `${subdomain}.preview.${project.slug}.obtura.app`;
+                // Preview: projectslug-branchname.s3rbvn.org
+                const branchSlug = (existingBuild?.branch || 'main')
+                    .replace(/[^a-z0-9]/gi, '-')
+                    .toLowerCase()
+                    .substring(0, 30); // Limit length
+                subdomain = branchSlug;
+                domain = `${project.slug}-${branchSlug}.s3rbvn.org`;
             }
-
             const approvalRequired = environment === 'production';
 
             // Create deployment entry directly
-            const deploymentResult = await db.query(
+            const deploymentInsert = await db.query(
                 `INSERT INTO deployments (
                     project_id, 
                     build_id, 
@@ -670,6 +675,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                     commit_hash, 
                     commit_message, 
                     commit_author,
+                    deployment_strategy,
                     domain,
                     subdomain,
                     deployed_by_user_id,
@@ -679,7 +685,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                     is_ephemeral,
                     preview_expires_at,
                     deployment_started_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) 
                 RETURNING id`,
                 [
                     projectId,
@@ -689,6 +695,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                     existingBuild.commit_hash,
                     existingBuild.metadata?.commit_message || 'N/A',
                     existingBuild.metadata?.commit_author || 'Unknown',
+                    strategy,
                     domain,
                     subdomain,
                     userID,
@@ -701,9 +708,8 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                 ],
             );
 
-            const deploymentId = deploymentResult.rows[0].id;
+            const deploymentId = deploymentInsert.rows[0].id;
 
-            // Create initial deployment event
             await db.query(
                 `INSERT INTO deployment_events (
                     deployment_id,
@@ -714,7 +720,6 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                 [deploymentId, 'started', `Deployment triggered by user for ${environment} environment using existing build`, 'info'],
             );
 
-            // If approval is required, create approval entry
             if (approvalRequired) {
                 await db.query(
                     `INSERT INTO deployment_approvals (
@@ -726,11 +731,9 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                 );
             }
 
-            // Publish directly to deployment queue (obtura.deploys exchange)
             await rabbitmq.connect();
             const channel = await rabbitmq.getChannel();
 
-            // Instead of just sending buildId
             await channel.publish(
                 'obtura.deploys',
                 'deploy.triggered',
@@ -754,6 +757,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
                         deployment: {
                             id: deploymentId,
                             environment: environment,
+                            strategy: strategy,
                             domain: domain,
                             subdomain: subdomain,
                         },
@@ -777,7 +781,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
             });
         }
 
-        // Original build flow continues below...
+        // CI/CD workflow
         const gitBranches = project.git_branches || [];
         const targetBranch = gitBranches.find((b: any) => b.type === environment);
 
@@ -859,30 +863,48 @@ const TriggerDeploy = async (req: Request, res: Response) => {
 
             const approvalRequired = environment === 'production';
 
-            const deploymentResult = await client.query(
+            const deploymentInsert = await client.query(
                 `INSERT INTO deployments (
-                    project_id, 
-                    build_id, 
-                    environment, 
-                    branch, 
-                    commit_hash, 
-                    commit_message, 
-                    commit_author,
+        project_id, 
+        build_id, 
+        environment, 
+        branch, 
+        commit_hash, 
+        commit_message, 
+        commit_author,
+        deployment_strategy,  // <- Add this
+        domain,
+        subdomain,
+        deployed_by_user_id,
+        deployment_trigger,
+        approval_required,
+        status,
+        is_ephemeral,
+        preview_expires_at,
+        deployment_started_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) 
+    RETURNING id`,
+                [
+                    projectId,
+                    newBuildId,
+                    environment,
+                    branch,
+                    commitHash,
+                    commitMessage,
+                    commitAuthor,
+                    strategy, // <- Add this parameter
                     domain,
                     subdomain,
-                    deployed_by_user_id,
-                    deployment_trigger,
-                    approval_required,
-                    status,
-                    is_ephemeral,
-                    preview_expires_at,
-                    deployment_started_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
-                RETURNING id`,
-                [projectId, newBuildId, environment, branch, commitHash, commitMessage, commitAuthor, domain, subdomain, userID, 'manual', approvalRequired, 'pending', environment === 'preview', environment === 'preview' ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null, new Date()],
+                    userID,
+                    'manual',
+                    approvalRequired,
+                    'pending',
+                    environment === 'preview',
+                    environment === 'preview' ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null,
+                    new Date(),
+                ],
             );
-
-            const deploymentId = deploymentResult.rows[0].id;
+            const deploymentId = deploymentInsert.rows[0].id;
 
             await client.query(
                 `INSERT INTO deployment_events (
@@ -988,11 +1010,22 @@ const GetProjectDetails = async (req: Request, res: Response) => {
         d.commit_hash,
         d.branch,
         d.status,
-        -- Construct deployment URL from domain or subdomain
+        d.deployment_strategy,
+        d.replica_count,
+        d.auto_scaling_enabled,
+        d.instance_type,
         COALESCE(d.domain, CONCAT(d.subdomain, '.yourapp.com')) as deployment_url,
         d.created_at,
         d.deployment_completed_at as completed_at,
         d.build_id,
+        d.deployed_by_user_id,
+        d.deployment_trigger,
+        d.traffic_percentage,
+        d.current_requests_per_minute,
+        d.avg_response_time_ms,
+        d.error_rate_percentage,
+        d.monitoring_enabled,
+        d.ssl_enabled,
         b.build_time_seconds,
         b.metadata as build_metadata,
         EXTRACT(EPOCH FROM (NOW() - COALESCE(d.deployment_completed_at, d.created_at))) as seconds_ago
@@ -1002,11 +1035,71 @@ const GetProjectDetails = async (req: Request, res: Response) => {
         AND d.project_id = $1
     ORDER BY d.project_id, d.environment, d.deployment_completed_at DESC NULLS LAST
 ),
+deployment_containers_info AS (
+    SELECT 
+        dc.deployment_id,
+        COUNT(*) as total_containers,
+        COUNT(*) FILTER (WHERE dc.status = 'healthy') as healthy_containers,
+        COUNT(*) FILTER (WHERE dc.status = 'unhealthy') as unhealthy_containers,
+        COUNT(*) FILTER (WHERE dc.is_active = true) as active_containers,
+        json_agg(
+            json_build_object(
+                'id', dc.id,
+                'name', dc.container_name,
+                'status', dc.status,
+                'healthStatus', dc.health_status,
+                'isActive', dc.is_active,
+                'deploymentGroup', dc.deployment_group,
+                'cpuUsage', dc.cpu_usage_percent,
+                'memoryUsage', dc.memory_usage_mb,
+                'memoryLimit', dc.memory_limit_mb,
+                'startedAt', dc.started_at
+            ) ORDER BY dc.created_at DESC
+        ) as containers
+    FROM deployment_containers dc
+    WHERE dc.status IN ('running', 'healthy', 'unhealthy')
+    GROUP BY dc.deployment_id
+),
+deployment_strategy_info AS (
+    SELECT 
+        dss.deployment_id,
+        json_build_object(
+            'strategy', dss.strategy,
+            'currentPhase', dss.current_phase,
+            'activeGroup', dss.active_group,
+            'standbyGroup', dss.standby_group,
+            'healthyReplicas', dss.healthy_replicas,
+            'unhealthyReplicas', dss.unhealthy_replicas,
+            'totalReplicas', dss.total_replicas,
+            'canaryTrafficPercentage', dss.canary_traffic_percentage,
+            'canaryAnalysisPassed', dss.canary_analysis_passed
+        ) as strategy_details
+    FROM deployment_strategy_state dss
+),
+deployment_alerts_info AS (
+    SELECT 
+        da.deployment_id,
+        json_agg(
+            json_build_object(
+                'type', da.alert_type,
+                'severity', da.severity,
+                'message', da.alert_message,
+                'resolved', da.resolved,
+                'createdAt', da.created_at
+            ) ORDER BY da.created_at DESC
+        ) FILTER (WHERE da.resolved = false) as unresolved_alerts,
+        COUNT(*) FILTER (WHERE da.resolved = false) as unresolved_alert_count
+    FROM deployment_alerts da
+    GROUP BY da.deployment_id
+),
 preview_deployments AS (
     SELECT 
         COALESCE(d.domain, CONCAT(d.subdomain, '.yourapp.com')) as deployment_url,
         d.branch,
         d.commit_hash,
+        d.status,
+        d.replica_count,
+        d.preview_expires_at,
         d.created_at,
         EXTRACT(EPOCH FROM (NOW() - d.created_at)) as seconds_ago
     FROM deployments d
@@ -1079,11 +1172,22 @@ SELECT
         ELSE 'inactive'
     END as status,
     
-    -- Production deployment
+    -- Production deployment with enhanced info
     COALESCE(
         json_build_object(
             'url', prod.deployment_url,
             'status', prod.status,
+            'deploymentStrategy', prod.deployment_strategy,
+            'replicaCount', prod.replica_count,
+            'autoScalingEnabled', prod.auto_scaling_enabled,
+            'instanceType', prod.instance_type,
+            'trafficPercentage', prod.traffic_percentage,
+            'currentRequestsPerMinute', prod.current_requests_per_minute,
+            'avgResponseTime', CONCAT(COALESCE(prod.avg_response_time_ms, 0), 'ms'),
+            'errorRate', CONCAT(COALESCE(prod.error_rate_percentage, 0), '%'),
+            'sslEnabled', prod.ssl_enabled,
+            'monitoringEnabled', prod.monitoring_enabled,
+            'deploymentTrigger', prod.deployment_trigger,
             'lastDeployment', CASE 
                 WHEN prod.seconds_ago < 3600 THEN CONCAT(FLOOR(prod.seconds_ago / 60), ' minutes ago')
                 WHEN prod.seconds_ago < 86400 THEN CONCAT(FLOOR(prod.seconds_ago / 3600), ' hours ago')
@@ -1100,16 +1204,34 @@ SELECT
                 WHEN prod.build_metadata->>'frameworks' IS NOT NULL THEN
                     (prod.build_metadata->'frameworks'->0->>'Name')
                 ELSE NULL
-            END
+            END,
+            'containers', COALESCE(prod_containers.containers, '[]'::json),
+            'totalContainers', COALESCE(prod_containers.total_containers, 0),
+            'healthyContainers', COALESCE(prod_containers.healthy_containers, 0),
+            'unhealthyContainers', COALESCE(prod_containers.unhealthy_containers, 0),
+            'strategyDetails', prod_strategy.strategy_details,
+            'unresolvedAlerts', COALESCE(prod_alerts.unresolved_alerts, '[]'::json),
+            'unresolvedAlertCount', COALESCE(prod_alerts.unresolved_alert_count, 0)
         ),
         '{}'::json
     ) as production,
     
-    -- Staging deployment
+    -- Staging deployment with enhanced info
     COALESCE(
         json_build_object(
             'url', stg.deployment_url,
             'status', stg.status,
+            'deploymentStrategy', stg.deployment_strategy,
+            'replicaCount', stg.replica_count,
+            'autoScalingEnabled', stg.auto_scaling_enabled,
+            'instanceType', stg.instance_type,
+            'trafficPercentage', stg.traffic_percentage,
+            'currentRequestsPerMinute', stg.current_requests_per_minute,
+            'avgResponseTime', CONCAT(COALESCE(stg.avg_response_time_ms, 0), 'ms'),
+            'errorRate', CONCAT(COALESCE(stg.error_rate_percentage, 0), '%'),
+            'sslEnabled', stg.ssl_enabled,
+            'monitoringEnabled', stg.monitoring_enabled,
+            'deploymentTrigger', stg.deployment_trigger,
             'lastDeployment', CASE 
                 WHEN stg.seconds_ago < 3600 THEN CONCAT(FLOOR(stg.seconds_ago / 60), ' minutes ago')
                 WHEN stg.seconds_ago < 86400 THEN CONCAT(FLOOR(stg.seconds_ago / 3600), ' hours ago')
@@ -1126,12 +1248,19 @@ SELECT
                 WHEN stg.build_metadata->>'frameworks' IS NOT NULL THEN
                     (stg.build_metadata->'frameworks'->0->>'Name')
                 ELSE NULL
-            END
+            END,
+            'containers', COALESCE(stg_containers.containers, '[]'::json),
+            'totalContainers', COALESCE(stg_containers.total_containers, 0),
+            'healthyContainers', COALESCE(stg_containers.healthy_containers, 0),
+            'unhealthyContainers', COALESCE(stg_containers.unhealthy_containers, 0),
+            'strategyDetails', stg_strategy.strategy_details,
+            'unresolvedAlerts', COALESCE(stg_alerts.unresolved_alerts, '[]'::json),
+            'unresolvedAlertCount', COALESCE(stg_alerts.unresolved_alert_count, 0)
         ),
         '{}'::json
     ) as staging,
     
-    -- Preview deployments
+    -- Preview deployments with enhanced info
     COALESCE(
         (
             SELECT json_agg(
@@ -1139,6 +1268,9 @@ SELECT
                     'url', pd.deployment_url,
                     'branch', pd.branch,
                     'commit', pd.commit_hash,
+                    'status', pd.status,
+                    'replicaCount', pd.replica_count,
+                    'expiresAt', pd.preview_expires_at,
                     'createdAt', CASE 
                         WHEN pd.seconds_ago < 3600 THEN CONCAT(FLOOR(pd.seconds_ago / 60), ' minutes ago')
                         WHEN pd.seconds_ago < 86400 THEN CONCAT(FLOOR(pd.seconds_ago / 3600), ' hours ago')
@@ -1197,6 +1329,12 @@ LEFT JOIN teams t ON t.id = p.team_id
 LEFT JOIN latest_build lb ON true
 LEFT JOIN latest_deployments prod ON prod.project_id = p.id AND prod.environment = 'production'
 LEFT JOIN latest_deployments stg ON stg.project_id = p.id AND stg.environment = 'staging'
+LEFT JOIN deployment_containers_info prod_containers ON prod_containers.deployment_id = prod.id
+LEFT JOIN deployment_containers_info stg_containers ON stg_containers.deployment_id = stg.id
+LEFT JOIN deployment_strategy_info prod_strategy ON prod_strategy.deployment_id = prod.id
+LEFT JOIN deployment_strategy_info stg_strategy ON stg_strategy.deployment_id = stg.id
+LEFT JOIN deployment_alerts_info prod_alerts ON prod_alerts.deployment_id = prod.id
+LEFT JOIN deployment_alerts_info stg_alerts ON stg_alerts.deployment_id = stg.id
 LEFT JOIN latest_metrics m ON true
 WHERE p.id = $1
     AND p.deleted_at IS NULL;
