@@ -8,7 +8,7 @@ import (
 )
 
 func (o *DeploymentOrchestrator) CreateTraefikConfig(job DeploymentJob, container *ContainerInfo) error {
-	configDir := "/app/traefik-dynamic"
+	configDir := "/etc/traefik/dynamic"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
@@ -52,9 +52,8 @@ func (o *DeploymentOrchestrator) CreateTraefikConfig(job DeploymentJob, containe
 	return nil
 }
 
-
 func (o *DeploymentOrchestrator) RemoveTraefikConfig(containerName string) error {
-	configPath := filepath.Join("/app/traefik-dynamic", fmt.Sprintf("%s.yml", containerName))
+	configPath := filepath.Join("/etc/traefik/dynamic", fmt.Sprintf("%s.yml", containerName))
 
 	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
 		log.Printf("⚠️ Failed to remove Traefik config for %s: %v", containerName, err)

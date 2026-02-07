@@ -97,6 +97,9 @@ func main() {
 	// SSE endpoint for live deployment logs
 	r.GET("/api/deployments/:deploymentId/logs/stream", deployment_logger.HandleDeploymentLogsSSE)
 
+	// SSE endpoint for live container logs
+	r.GET("/api/deployments/:deploymentId/containers/:containerId/logs/stream", deployment_logger.HandleContainerLogsSSE)
+
 	// REST endpoint for historical deployment logs (from deployment_events table)
 	r.GET("/api/deployments/:deploymentId/logs", func(c *gin.Context) {
 		deploymentID := c.Param("deploymentId")
@@ -119,7 +122,7 @@ func main() {
 			var createdAt interface{}
 			rows.Scan(&eventType, &message, &severity, &createdAt)
 			logs = append(logs, gin.H{
-				"log_type":   severity,        // Maps to type in frontend
+				"log_type":   severity, // Maps to type in frontend
 				"message":    message,
 				"event_type": eventType,
 				"created_at": createdAt,
@@ -157,6 +160,7 @@ func main() {
 
 	log.Printf("🌐 Starting server on port %s...", serverPort)
 	log.Printf("📡 SSE endpoint: http://localhost:%s/api/deployments/{deploymentId}/logs/stream", serverPort)
+	log.Printf("📡 Container logs SSE: http://localhost:%s/api/deployments/{deploymentId}/containers/{containerId}/logs/stream", serverPort)
 	log.Printf("📊 REST endpoint: http://localhost:%s/api/deployments/{deploymentId}/logs", serverPort)
 	if err := r.Run(":" + serverPort); err != nil {
 		log.Fatalf("Failed to start server: %v", err)

@@ -1,13 +1,18 @@
 package deployment_logger
 
 import (
+	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
 )
 
@@ -54,6 +59,14 @@ type DeploymentCompleteMessage struct {
 	DeploymentID string    `json:"deploymentId"`
 	Duration     string    `json:"duration,omitempty"`
 	ErrorMessage string    `json:"errorMessage,omitempty"`
+}
+
+type ContainerLogMessage struct {
+	Log          string    `json:"log"`
+	Timestamp    time.Time `json:"timestamp"`
+	Stream       string    `json:"stream"` // stdout or stderr
+	ContainerID  string    `json:"containerId"`
+	DeploymentID string    `json:"deploymentId"`
 }
 
 type DeploymentBroker struct {
@@ -294,7 +307,7 @@ func (b *DeploymentBroker) PublishComplete(deploymentID, status, message string,
 	})
 }
 
-// SSE Handler
+// SSE Handler for deployment logs
 func HandleDeploymentLogsSSE(c *gin.Context) {
 	deploymentID := c.Param("deploymentId")
 
@@ -369,6 +382,152 @@ func HandleDeploymentLogsSSE(c *gin.Context) {
 				c.Writer.Flush()
 				return
 			}
+		}
+	}
+}
+
+func HandleContainerLogsSSE(c *gin.Context) {
+	deploymentID := c.Param("deploymentId")
+	dbContainerID := c.Param("containerId") 
+
+	if deploymentID == "" || dbContainerID == "" {
+		c.JSON(400, gin.H{"error": "Deployment ID and Container ID are required"})
+		return
+	}
+
+	// Set SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	var dockerContainerID string
+	query := `
+		SELECT container_id 
+		FROM deployment_containers 
+		WHERE deployment_id = $1 AND id = $2
+	`
+	err := globalDeploymentBroker.db.QueryRow(query, deploymentID, dbContainerID).Scan(&dockerContainerID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.SSEvent("error", gin.H{"error": "Container not found in this deployment"})
+		} else {
+			log.Printf("❌ Failed to fetch container from database: %v", err)
+			c.SSEvent("error", gin.H{"error": "Failed to fetch container information"})
+		}
+		return
+	}
+
+	log.Printf("📋 Streaming logs for DB container %s (Docker: %s)", dbContainerID, dockerContainerID)
+
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		log.Printf("❌ Failed to create Docker client: %v", err)
+		c.SSEvent("error", gin.H{"error": "Failed to connect to Docker"})
+		return
+	}
+	defer dockerClient.Close()
+
+	c.SSEvent("connected", gin.H{
+		"deploymentId":      deploymentID,
+		"containerId":       dbContainerID,
+		"dockerContainerId": dockerContainerID,
+		"message":           "Connected to container logs",
+	})
+	c.Writer.Flush()
+
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
+	logOptions := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     true,
+		Timestamps: true,
+		Tail:       "100", 
+	}
+
+	logs, err := dockerClient.ContainerLogs(ctx, dockerContainerID, logOptions)
+	if err != nil {
+		log.Printf("❌ Failed to get container logs: %v", err)
+		c.SSEvent("error", gin.H{"error": "Failed to retrieve container logs"})
+		return
+	}
+	defer logs.Close()
+
+	logChan := make(chan ContainerLogMessage, 100)
+	errChan := make(chan error, 1)
+
+	go func() {
+		reader := bufio.NewReader(logs)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				header := make([]byte, 8)
+				_, err := io.ReadFull(reader, header)
+				if err != nil {
+					if err != io.EOF {
+						errChan <- err
+					}
+					return
+				}
+
+				size := int(header[4])<<24 | int(header[5])<<16 | int(header[6])<<8 | int(header[7])
+
+				logBytes := make([]byte, size)
+				_, err = io.ReadFull(reader, logBytes)
+				if err != nil {
+					errChan <- err
+					return
+				}
+
+				stream := "stdout"
+				if header[0] == 2 {
+					stream = "stderr"
+				}
+
+				logMsg := ContainerLogMessage{
+					Log:          string(logBytes),
+					Timestamp:    time.Now(),
+					Stream:       stream,
+					ContainerID:  dbContainerID, 
+					DeploymentID: deploymentID,
+				}
+
+				select {
+				case logChan <- logMsg:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("📡 Client disconnected from container logs: %s", dbContainerID)
+			return
+
+		case <-heartbeat.C:
+			c.SSEvent("heartbeat", gin.H{"time": time.Now().Unix()})
+			c.Writer.Flush()
+
+		case err := <-errChan:
+			log.Printf("❌ Error reading container logs: %v", err)
+			c.SSEvent("error", gin.H{"error": err.Error()})
+			c.Writer.Flush()
+			return
+
+		case logMsg := <-logChan:
+			data, _ := json.Marshal(logMsg)
+			fmt.Fprintf(c.Writer, "event: log\ndata: %s\n\n", data)
+			c.Writer.Flush()
 		}
 	}
 }

@@ -280,12 +280,12 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 		log.Printf("[blue-green] found %d existing containers in %s group, cleaning up...", len(existingContainers), newGroup)
 		o.broker.PublishLog(job.DeploymentID, "info",
 			fmt.Sprintf("Removing %d existing containers from %s group", len(existingContainers), newGroup))
-		
+
 		for _, cont := range existingContainers {
 			log.Printf("[cleanup] removing Traefik config for %s", cont.Name)
 			o.RemoveTraefikConfig(cont.Name)
 		}
-		
+
 		o.cleanupContainersWithDocker(ctx, existingContainers)
 
 		log.Printf("[cleanup] waiting for cleanup to complete...")
@@ -379,12 +379,12 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 		} else {
 			o.broker.PublishLog(job.DeploymentID, "info",
 				fmt.Sprintf("Removing %d old containers", len(oldContainers)))
-			
+
 			// Remove Traefik configs for old containers
 			for _, cont := range oldContainers {
 				o.RemoveTraefikConfig(cont.Name)
 			}
-			
+
 			o.cleanupContainersWithDocker(ctx, oldContainers)
 		}
 	}
@@ -499,7 +499,7 @@ func (o *DeploymentOrchestrator) RollingUpdate(ctx context.Context, job Deployme
 				toRemove := currentContainers[start:removeEnd]
 
 				time.Sleep(drainPeriod)
-				
+
 				// Remove Traefik configs before removing containers
 				for _, old := range toRemove {
 					o.RemoveTraefikConfig(old.Name)

@@ -1148,6 +1148,8 @@ deployment_history AS (
         d.error_message,
         d.replica_count,
         d.traffic_percentage,
+        d.build_id,
+        b.status as build_status,
         COALESCE(d.domain, CONCAT(d.subdomain, '.yourapp.com')) as deployment_url,
         u.name as deployed_by_name,
         u.email as deployed_by_email,
@@ -1178,9 +1180,30 @@ deployment_history AS (
     LEFT JOIN builds b ON b.id = d.build_id
     LEFT JOIN deployment_strategy_state dss ON dss.deployment_id = d.id
     WHERE d.project_id = $1
-        AND d.status IN ('active', 'failed', 'rolled_back', 'terminated')
+        AND d.status IN ('active', 'failed', 'rolled_back', 'terminated', 'pending', 'deploying')
     ORDER BY d.created_at DESC
     LIMIT 30
+),
+deployment_history_containers AS (
+    SELECT 
+        dc.deployment_id,
+        json_agg(
+            json_build_object(
+                'id', dc.id,
+                'name', dc.container_name,
+                'status', dc.status,
+                'healthStatus', dc.health_status,
+                'isActive', dc.is_active,
+                'deploymentGroup', dc.deployment_group,
+                'cpuUsage', dc.cpu_usage_percent,
+                'memoryUsage', dc.memory_usage_mb,
+                'memoryLimit', dc.memory_limit_mb,
+                'startedAt', dc.started_at
+            ) ORDER BY dc.created_at DESC
+        ) as containers
+    FROM deployment_containers dc
+    WHERE dc.status IN ('running', 'healthy', 'unhealthy')
+    GROUP BY dc.deployment_id
 ),
 latest_metrics AS (
     SELECT 
@@ -1404,11 +1427,15 @@ SELECT
                     END,
                     'strategyPhase', dh.strategy_phase,
                     'trafficSwitchCount', dh.traffic_switch_count,
-                    'errorMessage', dh.error_message
+                    'errorMessage', dh.error_message,
+                    'buildId', dh.build_id,
+                    'buildStatus', dh.build_status,
+                    'containers', COALESCE(dhc.containers, '[]'::json)
                 )
                 ORDER BY dh.deployment_started_at DESC
             )
             FROM deployment_history dh
+            LEFT JOIN deployment_history_containers dhc ON dhc.deployment_id = dh.id
         ),
         '[]'::json
     ) as deployments,

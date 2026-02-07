@@ -1,7 +1,7 @@
 'use client'
 import React, { useRef, useState } from 'react'
 import { Rocket, Settings, Activity, Globe, GitBranch, Clock, CheckCircle2, XCircle, AlertCircle, Eye, Code, Server, Lock, RotateCcw, Play, Pause, Plus, Trash2, Copy, ExternalLink, TrendingUp, Zap, Shield, Layers, Package, Hammer, Upload, Calendar, Save, Loader2 } from 'lucide-react'
-import { Build, BuildStatus, DeploymentConfig, Deployment, ProjectData } from './Types/ProjectTypes'
+import { Build, BuildStatus, DeploymentConfig, Deployment, ProjectData, Container } from './Types/ProjectTypes'
 import EnvFileUpload from '../account/components/EnvFileUpload'
 import DialogCanvas from '@/common-components/DialogCanvas'
 import axios from 'axios'
@@ -56,6 +56,9 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
     const [showDeploymentLogs, setShowDeploymentLogs] = useState(false)
     const [currentDeploymentId, setCurrentDeploymentId] = useState<string | null>(null)
+    const [currentDeploymentBuildId, setCurrentDeploymentBuildId] = useState<string | null>(null)
+    const [currentDeploymentMode, setCurrentDeploymentMode] = useState<'deploying' | 'history'>('deploying')
+    const [currentContainers, setCurrentContainers] = useState<Container[]>([])
 
     const [deployments, setDeployments] = useState<Deployment[]>(
         projectData.deployments.map(deployment => ({
@@ -77,7 +80,8 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             buildTime: deployment.buildTime,
             strategyPhase: deployment.strategyPhase,
             trafficSwitchCount: deployment.trafficSwitchCount,
-            errorMessage: deployment.errorMessage
+            errorMessage: deployment.errorMessage,
+            containers: (deployment as any).containers || []
         }))
     )
     const liveDeployments = useDeploymentUpdates(projectData.id, deployments)
@@ -152,15 +156,18 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                     buildTime: null,
                     strategyPhase: 'preparing',
                     trafficSwitchCount: 0,
-                    errorMessage: null
+                    errorMessage: null,
+                    buildId: resp.data.buildId || config.buildId
                 }
 
                 setDeployments(prev => [newDeployment, ...prev])
 
-                // Show deployment logs viewer
+                // Show deployment logs viewer in deploying mode
                 setCurrentDeploymentId(resp.data.deploymentId)
+                setCurrentDeploymentBuildId(resp.data.buildId || config.buildId || null)
                 setDeploymentEnvironment(config.environment || 'production')
                 setDeploymentStrategy(config.strategy || 'blue_green')
+                setCurrentDeploymentMode('deploying')
                 setShowDeploymentLogs(true)
                 setShowDeployDialog(false)
             }
@@ -449,9 +456,14 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                         projectId={projectData.id}
                         environment={deploymentEnvironment}
                         strategy={deploymentStrategy}
+                        buildId={currentDeploymentBuildId || undefined}
+                        containers={currentContainers}
+                        mode={currentDeploymentMode}
                         onClose={() => {
                             setShowDeploymentLogs(false)
                             setCurrentDeploymentId(null)
+                            setCurrentDeploymentBuildId(null)
+                            setCurrentContainers([])
                         }}
                     />
                 </DialogCanvas>
@@ -776,6 +788,11 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                     <tbody className="divide-y divide-zinc-800">
                                         {liveDeployments.map(deployment => {
                                             const getStatusDisplay = () => {
+                                                // Check if deployment has a build in progress
+                                                if (deployment.buildId && deployment.buildStatus && 
+                                                    ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus)) {
+                                                    return { icon: Loader2, text: 'Building', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
+                                                }
                                                 switch (deployment.status) {
                                                     case 'pending':
                                                         return { icon: Clock, text: 'Pending', color: 'text-blue-500', bgColor: 'bg-blue-500/10' }
@@ -854,17 +871,30 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                         )}
                                                     </td>
                                                     <td className="px-6 py-4">
-                                                        <button
-                                                            className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
-                                                            onClick={() => {
-                                                                setCurrentDeploymentId(deployment.id)
-                                                                setDeploymentEnvironment(deployment.environment)
-                                                                setDeploymentStrategy(deployment.deploymentStrategy)
-                                                                setShowDeploymentLogs(true)
-                                                            }}
-                                                        >
-                                                            <Eye size={16} />
-                                                        </button>
+                                                        <div className="flex items-center gap-2">
+                                                            {deployment.buildId && deployment.buildStatus && ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus) && (
+                                                                <span className="flex items-center gap-1 text-xs text-blue-400">
+                                                                    <Loader2 size={12} className="animate-spin" />
+                                                                    Building
+                                                                </span>
+                                                            )}
+                                                            <button
+                                                                className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
+                                                                onClick={() => {
+                                                                    setCurrentDeploymentId(deployment.id)
+                                                                    setCurrentDeploymentBuildId(deployment.buildId || null)
+                                                                    setDeploymentEnvironment(deployment.environment)
+                                                                    setDeploymentStrategy(deployment.deploymentStrategy)
+                                                                    setCurrentDeploymentMode('history')
+                                                                    const containers = (deployment as any).containers || []
+                                                                    console.log('[DeploymentLogs] Setting containers:', containers.length, containers)
+                                                                    setCurrentContainers(containers as Container[])
+                                                                    setShowDeploymentLogs(true)
+                                                                }}
+                                                            >
+                                                                <Eye size={16} />
+                                                            </button>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             )

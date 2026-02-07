@@ -53,6 +53,9 @@ export interface Deployment {
     strategyPhase: string | null
     trafficSwitchCount: number
     errorMessage: string | null
+    buildId?: string
+    buildStatus?: BuildStatus
+    containers?: Container[]
 }
 
 export interface FrameworkConfig {
