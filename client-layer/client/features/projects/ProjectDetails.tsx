@@ -11,6 +11,7 @@ import EnvVarsCard from './components/EnvVarCard'
 import { useBuildUpdates } from '@/hooks/useBuildUpdates'
 import DeployDialog from './components/DeployDialog'
 import DeploymentLogsViewer from './components/DeploymentLogsViewer'
+import DeploymentSettings from './components/DeploymentSettings'
 import { useDeploymentUpdates } from '@/hooks/useDeployuseDeploymentUpdates'
 
 const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; services: { service_name: string; env_vars: Record<string, string> }[] }> = ({ projectData, accessToken, services }) => {
@@ -311,7 +312,9 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         }
 
         try {
-            const response = await axios.delete(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/delete-build/${buildId}`, {
+            const response = await axios({
+                method: 'delete',
+                url: `${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/delete-build/${buildId}`,
                 data: {
                     projectId: projectData.id,
                     accessToken: accessToken
@@ -742,11 +745,11 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                         <div className="flex items-center justify-between">
                             <div>
                                 <h2 className="text-xl font-semibold">Deployment History</h2>
-                                <p className="text-sm text-zinc-400">Showing {projectData.deployments.length} recent deployments</p>
+                                <p className="text-sm text-zinc-400">Showing {liveDeployments.length} recent deployments</p>
                             </div>
                         </div>
 
-                        {projectData.deployments.length === 0 ? (
+                        {liveDeployments.length === 0 ? (
                             <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-12 text-center">
                                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900">
                                     <Rocket className="text-zinc-600" size={32} />
@@ -1425,78 +1428,10 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 )}
 
                 {activeTab === 'settings' && (
-                    <div className="space-y-6">
-                        <div>
-                            <h2 className="text-xl font-semibold">Project Settings</h2>
-                            <p className="text-sm text-zinc-400">Configure your project deployment settings</p>
-                        </div>
-
-                        <div className="space-y-4">
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                <h3 className="mb-4 font-semibold">Build Settings</h3>
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="mb-2 block text-sm text-zinc-400">Project Type</label>
-                                        <div className="flex items-center gap-2 text-sm font-medium">
-                                            {projectData.isMonorepo ? (
-                                                <>
-                                                    <Layers className="text-purple-500" size={16} />
-                                                    <span>Monorepo ({projectData.frameworks!.length} applications)</span>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Code size={16} />
-                                                    <span>{projectData.framework}</span>
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {projectData.isMonorepo &&
-                                        projectData.frameworks!.map((framework, idx) => (
-                                            <div key={idx} className="rounded border border-zinc-800 bg-zinc-900/50 p-4">
-                                                <div className="mb-3 font-medium text-purple-400">
-                                                    {framework.Name} - {framework.Path}
-                                                </div>
-                                                <div className="space-y-3">
-                                                    <div>
-                                                        <label className="mb-1 block text-xs text-zinc-400">Build Command</label>
-                                                        <input type="text" defaultValue={framework.BuildCmd} className="w-full rounded-lg border border-zinc-800 bg-black px-3 py-2 text-sm text-white focus:border-zinc-700 focus:outline-none" />
-                                                    </div>
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <div>
-                                                            <label className="mb-1 block text-xs text-zinc-400">Runtime</label>
-                                                            <input type="text" defaultValue={framework.Runtime} className="w-full rounded-lg border border-zinc-800 bg-black px-3 py-2 text-sm text-white focus:border-zinc-700 focus:outline-none" />
-                                                        </div>
-                                                        <div>
-                                                            <label className="mb-1 block text-xs text-zinc-400">Port</label>
-                                                            <input type="text" defaultValue={framework.Port} className="w-full rounded-lg border border-zinc-800 bg-black px-3 py-2 text-sm text-white focus:border-zinc-700 focus:outline-none" />
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                <h3 className="mb-4 font-semibold">Domain Settings</h3>
-                                <div className="space-y-3">
-                                    <div>
-                                        <label className="mb-2 block text-sm text-zinc-400">Production Domain</label>
-                                        <input type="text" defaultValue={projectData.production.url || 'Not configured'} className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-zinc-700 focus:outline-none" />
-                                    </div>
-                                    <button className="text-sm text-orange-500 hover:text-orange-400">+ Add Custom Domain</button>
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-red-900/50 bg-red-500/5 p-5">
-                                <h3 className="mb-2 font-semibold text-red-500">Danger Zone</h3>
-                                <p className="mb-4 text-sm text-zinc-400">Irreversible actions for this project</p>
-                                <button className="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600">Delete Project</button>
-                            </div>
-                        </div>
-                    </div>
+                    <DeploymentSettings 
+                        projectId={projectData.id} 
+                        accessToken={accessToken} 
+                    />
                 )}
                 {showBuildLogs && selectedBuild && (
                     <DialogCanvas closeDialog={() => setShowBuildLogs(false)}>

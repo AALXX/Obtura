@@ -248,52 +248,66 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		return
 	}
 
-	quotaService := security.NewQuotaService(w.db.DB)
-	quotaLimits, err := quotaService.GetQuotaForProject(ctx, job.ProjectID)
+	// Get company ID from project
+	var companyID string
+	err = w.db.QueryRowContext(ctx, "SELECT company_id FROM projects WHERE id = $1", job.ProjectID).Scan(&companyID)
 	if err != nil {
-		log.Printf("⚠️ Failed to get quota limits, using free tier: %v", err)
-		quotaLimits = quotaService.GetFreeQuota()
-	}
-
-	var planName string
-	planQuery := `
-SELECT sp.id
-FROM projects p
-JOIN companies c ON c.id = p.company_id
-JOIN subscriptions s ON s.company_id = c.id
-JOIN subscription_plans sp ON sp.id = s.plan_id
-WHERE p.id = $1
-  AND s.status = 'active'
-LIMIT 1;
-
-`
-
-	if err := w.db.QueryRowContext(ctx, planQuery, job.ProjectID).Scan(&planName); err != nil {
-		planName = "free"
-	}
-
-	limits := security.BuildLimits{
-		MaxConcurrent: quotaLimits.MaxConcurrentBuilds,
-		MaxPerHour:    quotaLimits.MaxBuildsPerHour,
-		MaxPerDay:     quotaLimits.MaxBuildsPerDay,
-	}
-
-	log.Printf("🏗️ Starting build %s for project %s (%s)", job.BuildID, job.ProjectID, planName)
-
-	w.streamStatus(job.BuildID, "queued", "Build queued")
-
-	buildStartTime := time.Now()
-
-	err = w.rateLimiter.CheckAndIncrementBuildLimit(ctx, job.ProjectID, limits)
-	if err != nil {
-		log.Printf("❌ Rate limit exceeded: %v", err)
-		w.streamLog(job.BuildID, fmt.Sprintf("Build rejected: %v", err))
-		w.db.ExecContext(ctx, "UPDATE builds SET status = 'rejected', error_message = $1 WHERE id = $2", err.Error(), job.BuildID)
+		log.Printf("❌ Failed to get company ID: %v", err)
+		w.streamLog(job.BuildID, "Failed to get company information")
+		w.streamStatus(job.BuildID, "failed", "Failed to get company information")
 		msg.Nack(false, false)
 		return
 	}
 
-	defer w.rateLimiter.DecrementConcurrentBuilds(ctx, job.ProjectID)
+	// Get quota for company (not project)
+	quotaService := security.NewQuotaService(w.db.DB)
+	quotaLimits, err := quotaService.GetQuotaForCompany(ctx, companyID)
+	if err != nil {
+		log.Printf("❌ Failed to get quota limits: %v", err)
+		w.streamLog(job.BuildID, "Failed to get company quota")
+		w.streamStatus(job.BuildID, "failed", "Failed to get company quota")
+		msg.Nack(false, false)
+		return
+	}
+	
+	var planName string
+	planQuery := `
+		SELECT sp.id
+		FROM companies c
+		JOIN subscriptions s ON s.company_id = c.id
+		JOIN subscription_plans sp ON sp.id = s.plan_id
+		WHERE c.id = $1
+		  AND s.status = 'active'
+		LIMIT 1
+	`
+	if err := w.db.QueryRowContext(ctx, planQuery, companyID).Scan(&planName); err != nil {
+		planName = "starter"
+	}
+
+	limits := security.BuildLimits{
+		MaxConcurrent: quotaLimits.MaxConcurrentBuilds,
+		MaxPerMonth:   quotaLimits.MaxBuildsPerMonth,
+	}
+
+	log.Printf("🏗️ Starting build %s for project %s, company %s (%s)",
+		job.BuildID, job.ProjectID, companyID, planName)
+
+	w.streamStatus(job.BuildID, "queued", "Build queued")
+	buildStartTime := time.Now()
+
+	// Check rate limits at COMPANY level
+	err = w.rateLimiter.CheckAndIncrementBuildLimit(ctx, companyID, limits)
+	if err != nil {
+		log.Printf("❌ Rate limit exceeded: %v", err)
+		w.streamLog(job.BuildID, fmt.Sprintf("Build rejected: %v", err))
+		w.db.ExecContext(ctx, "UPDATE builds SET status = 'rejected', error_message = $1 WHERE id = $2",
+			err.Error(), job.BuildID)
+		msg.Nack(false, false)
+		return
+	}
+
+	// Decrement on completion
+	defer w.rateLimiter.DecrementConcurrentBuilds(ctx, companyID)
 
 	buildCtx, cancel := context.WithTimeout(ctx, quotaLimits.MaxBuildDuration)
 	defer cancel()
@@ -722,13 +736,12 @@ LIMIT 1;
 	w.streamLog(job.BuildID, fmt.Sprintf("✅ Build completed successfully with %d service(s) in %dm %ds",
 		len(result.Frameworks), buildTimeSeconds/60, buildTimeSeconds%60))
 
-
 	if job.Deploy != nil && *job.Deploy {
 		fmt.Println("Deploy is enabled")
 
 		// Fetch deployment details from database
 		var environment, strategy, domain string
-		var subdomain sql.NullString 
+		var subdomain sql.NullString
 
 		deployQuery := `
         SELECT environment, deployment_strategy, domain, subdomain

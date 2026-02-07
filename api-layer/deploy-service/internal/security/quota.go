@@ -14,8 +14,6 @@ type BuildQuota struct {
 	MaxBuildSize        int64         // Max build context size in bytes
 
 	// Per-user limits (from subscription tier)
-	MaxBuildsPerHour  int
-	MaxBuildsPerDay   int
 	MaxBuildsPerMonth int
 
 	// Resource limits per build
@@ -66,8 +64,6 @@ func (qs *QuotaService) GetQuotaForCompany(ctx context.Context, companyID string
 			sp.max_concurrent_builds,
 			sp.max_build_duration_minutes,
 			sp.max_build_size_mb,
-			sp.max_builds_per_hour,
-			sp.max_builds_per_day,
 			sp.max_builds_per_month,
 			sp.cpu_cores_per_build,
 			sp.memory_gb_per_build,
@@ -89,8 +85,6 @@ func (qs *QuotaService) GetQuotaForCompany(ctx context.Context, companyID string
 		&quota.MaxConcurrentBuilds,
 		&durationMinutes,
 		&buildSizeMB,
-		&quota.MaxBuildsPerHour,
-		&quota.MaxBuildsPerDay,
 		&quota.MaxBuildsPerMonth,
 		&cpuCores,
 		&quota.MemoryGB,
@@ -100,22 +94,24 @@ func (qs *QuotaService) GetQuotaForCompany(ctx context.Context, companyID string
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			// Return free tier quota as fallback
-			return qs.GetFreeQuota(), nil
-		}
 		return BuildQuota{}, fmt.Errorf("failed to get quota for company: %w", err)
 	}
 
 	// Convert nullable values
 	if durationMinutes.Valid {
 		quota.MaxBuildDuration = time.Duration(durationMinutes.Int32) * time.Minute
+	} else {
+		quota.MaxBuildDuration = 30 * time.Minute
 	}
 	if buildSizeMB.Valid {
 		quota.MaxBuildSize = int64(buildSizeMB.Int32) * 1024 * 1024
+	} else {
+		quota.MaxBuildSize = 500 * 1024 * 1024
 	}
 	if cpuCores.Valid {
 		quota.CPUCores = cpuCores.Float64
+	} else {
+		quota.CPUCores = 2.0
 	}
 
 	// Set reasonable defaults for fields not in subscription_plans
@@ -131,8 +127,6 @@ func (qs *QuotaService) GetQuotaForProject(ctx context.Context, projectID string
 			sp.max_concurrent_builds,
 			sp.max_build_duration_minutes,
 			sp.max_build_size_mb,
-			sp.max_builds_per_hour,
-			sp.max_builds_per_day,
 			sp.max_builds_per_month,
 			sp.cpu_cores_per_build,
 			sp.memory_gb_per_build,
@@ -155,8 +149,6 @@ func (qs *QuotaService) GetQuotaForProject(ctx context.Context, projectID string
 		&quota.MaxConcurrentBuilds,
 		&durationMinutes,
 		&buildSizeMB,
-		&quota.MaxBuildsPerHour,
-		&quota.MaxBuildsPerDay,
 		&quota.MaxBuildsPerMonth,
 		&cpuCores,
 		&quota.MemoryGB,
@@ -166,21 +158,24 @@ func (qs *QuotaService) GetQuotaForProject(ctx context.Context, projectID string
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return qs.GetFreeQuota(), nil
-		}
 		return BuildQuota{}, fmt.Errorf("failed to get quota for project: %w", err)
 	}
 
 	// Convert nullable values
 	if durationMinutes.Valid {
 		quota.MaxBuildDuration = time.Duration(durationMinutes.Int32) * time.Minute
+	} else {
+		quota.MaxBuildDuration = 30 * time.Minute
 	}
 	if buildSizeMB.Valid {
 		quota.MaxBuildSize = int64(buildSizeMB.Int32) * 1024 * 1024
+	} else {
+		quota.MaxBuildSize = 500 * 1024 * 1024
 	}
 	if cpuCores.Valid {
 		quota.CPUCores = cpuCores.Float64
+	} else {
+		quota.CPUCores = 2.0
 	}
 
 	// Set reasonable defaults
@@ -190,32 +185,12 @@ func (qs *QuotaService) GetQuotaForProject(ctx context.Context, projectID string
 	return quota, nil
 }
 
-func (qs *QuotaService) GetFreeQuota() BuildQuota {
-	return BuildQuota{
-		MaxConcurrentBuilds:  1,
-		MaxBuildDuration:     10 * time.Minute,
-		MaxBuildSize:         250 * 1024 * 1024, // 250MB
-		MaxBuildsPerHour:     3,
-		MaxBuildsPerDay:      10,
-		MaxBuildsPerMonth:    50,
-		CPUCores:             1.0,
-		MemoryGB:             1,
-		DiskSpaceGB:          2,
-		MaxServices:          2,
-		MaxBuildLogs:         10 * 1024 * 1024, // 10MB
-		MaxBuildArtifactsGB:  1,
-		MaxLogsRetentionDays: 7,
-	}
-}
-
 func (qs *QuotaService) GetQuotaByPlanID(ctx context.Context, planID string) (BuildQuota, error) {
 	query := `
 		SELECT 
 			max_concurrent_builds,
 			max_build_duration_minutes,
 			max_build_size_mb,
-			max_builds_per_hour,
-			max_builds_per_day,
 			max_builds_per_month,
 			cpu_cores_per_build,
 			memory_gb_per_build,
@@ -234,8 +209,6 @@ func (qs *QuotaService) GetQuotaByPlanID(ctx context.Context, planID string) (Bu
 		&quota.MaxConcurrentBuilds,
 		&durationMinutes,
 		&buildSizeMB,
-		&quota.MaxBuildsPerHour,
-		&quota.MaxBuildsPerDay,
 		&quota.MaxBuildsPerMonth,
 		&cpuCores,
 		&quota.MemoryGB,
@@ -251,12 +224,18 @@ func (qs *QuotaService) GetQuotaByPlanID(ctx context.Context, planID string) (Bu
 	// Convert nullable values
 	if durationMinutes.Valid {
 		quota.MaxBuildDuration = time.Duration(durationMinutes.Int32) * time.Minute
+	} else {
+		quota.MaxBuildDuration = 30 * time.Minute
 	}
 	if buildSizeMB.Valid {
 		quota.MaxBuildSize = int64(buildSizeMB.Int32) * 1024 * 1024
+	} else {
+		quota.MaxBuildSize = 500 * 1024 * 1024
 	}
 	if cpuCores.Valid {
 		quota.CPUCores = cpuCores.Float64
+	} else {
+		quota.CPUCores = 2.0
 	}
 
 	quota.MaxBuildLogs = 50 * 1024 * 1024
@@ -267,8 +246,6 @@ func (qs *QuotaService) GetQuotaByPlanID(ctx context.Context, planID string) (Bu
 
 // IsWithinQuota checks if the usage is within the specified quota limits
 type Usage struct {
-	CurrentBuildsPerHour    int
-	CurrentBuildsPerDay     int
 	CurrentBuildsPerMonth   int
 	CurrentConcurrentBuilds int
 	CurrentBuildSize        int64
@@ -276,12 +253,6 @@ type Usage struct {
 }
 
 func (q BuildQuota) IsWithinQuota(usage Usage) (bool, string) {
-	if usage.CurrentBuildsPerHour >= q.MaxBuildsPerHour {
-		return false, "Hourly build limit exceeded"
-	}
-	if usage.CurrentBuildsPerDay >= q.MaxBuildsPerDay {
-		return false, "Daily build limit exceeded"
-	}
 	if usage.CurrentBuildsPerMonth >= q.MaxBuildsPerMonth {
 		return false, "Monthly build limit exceeded"
 	}
@@ -360,9 +331,6 @@ func (qs *QuotaService) GetDeploymentQuotaForProject(ctx context.Context, projec
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return qs.GetFreeDeploymentQuota(), nil
-		}
 		return DeploymentQuota{}, fmt.Errorf("failed to get deployment quota for project: %w", err)
 	}
 
@@ -381,6 +349,8 @@ func (qs *QuotaService) GetDeploymentQuotaForProject(ctx context.Context, projec
 
 	if cpuCores.Valid {
 		quota.CPUCoresPerDeployment = cpuCores.Float64
+	} else {
+		quota.CPUCoresPerDeployment = 2.0
 	}
 
 	// Defaults
@@ -424,9 +394,6 @@ func (qs *QuotaService) GetDeploymentQuotaForCompany(ctx context.Context, compan
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return qs.GetFreeDeploymentQuota(), nil
-		}
 		return DeploymentQuota{}, fmt.Errorf("failed to get deployment quota for company: %w", err)
 	}
 
@@ -445,109 +412,12 @@ func (qs *QuotaService) GetDeploymentQuotaForCompany(ctx context.Context, compan
 
 	if cpuCores.Valid {
 		quota.CPUCoresPerDeployment = cpuCores.Float64
+	} else {
+		quota.CPUCoresPerDeployment = 2.0
 	}
 
 	quota.MaxDeploymentDuration = 30 * time.Minute
 	quota.MaxServicesPerDeployment = 10
 
 	return quota, nil
-}
-
-func (qs *QuotaService) GetFreeDeploymentQuota() DeploymentQuota {
-	return DeploymentQuota{
-		MaxConcurrentDeployments:  1,
-		MaxDeploymentDuration:     15 * time.Minute,
-		MaxDeploymentsPerMonth:    100,
-		CPUCoresPerDeployment:     1.0,
-		MemoryGBPerDeployment:     2,
-		DiskSpaceGB:               5,
-		MaxEnvironmentsPerProject: 3,
-		MaxPreviewEnvironments:    2,
-		RollbackRetentionCount:    5,
-		MaxServicesPerDeployment:  3,
-	}
-}
-
-
-
-
-// CheckQuotaBeforeBuild validates if a build can proceed based on current usage
-func (qs *QuotaService) CheckQuotaBeforeBuild(ctx context.Context, companyID string, buildSize int64, servicesCount int) error {
-	// Get current usage from subscriptions table
-	var usage Usage
-	query := `
-		SELECT 
-			current_builds_this_hour,
-			current_builds_today,
-			current_builds_this_month,
-			current_concurrent_builds
-		FROM subscriptions
-		WHERE company_id = $1 AND status = 'active'
-	`
-
-	err := qs.db.QueryRowContext(ctx, query, companyID).Scan(
-		&usage.CurrentBuildsPerHour,
-		&usage.CurrentBuildsPerDay,
-		&usage.CurrentBuildsPerMonth,
-		&usage.CurrentConcurrentBuilds,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to get current usage: %w", err)
-	}
-
-	usage.CurrentBuildSize = buildSize
-	usage.CurrentServices = servicesCount
-
-	// Get quota
-	quota, err := qs.GetQuotaForCompany(ctx, companyID)
-	if err != nil {
-		return fmt.Errorf("failed to get quota: %w", err)
-	}
-
-	// Check quota
-	withinQuota, reason := quota.IsWithinQuota(usage)
-	if !withinQuota {
-		return fmt.Errorf("quota exceeded: %s", reason)
-	}
-
-	return nil
-}
-
-// IncrementBuildUsage updates usage counters after starting a build
-func (qs *QuotaService) IncrementBuildUsage(ctx context.Context, companyID string) error {
-	query := `
-		UPDATE subscriptions
-		SET 
-			current_builds_this_hour = current_builds_this_hour + 1,
-			current_builds_today = current_builds_today + 1,
-			current_builds_this_month = current_builds_this_month + 1,
-			current_concurrent_builds = current_concurrent_builds + 1,
-			updated_at = NOW()
-		WHERE company_id = $1 AND status = 'active'
-	`
-
-	_, err := qs.db.ExecContext(ctx, query, companyID)
-	if err != nil {
-		return fmt.Errorf("failed to increment build usage: %w", err)
-	}
-
-	return nil
-}
-
-// DecrementConcurrentBuilds decreases concurrent build count after completion
-func (qs *QuotaService) DecrementConcurrentBuilds(ctx context.Context, companyID string) error {
-	query := `
-		UPDATE subscriptions
-		SET 
-			current_concurrent_builds = GREATEST(current_concurrent_builds - 1, 0),
-			updated_at = NOW()
-		WHERE company_id = $1 AND status = 'active'
-	`
-
-	_, err := qs.db.ExecContext(ctx, query, companyID)
-	if err != nil {
-		return fmt.Errorf("failed to decrement concurrent builds: %w", err)
-	}
-
-	return nil
 }

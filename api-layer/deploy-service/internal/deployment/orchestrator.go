@@ -273,6 +273,25 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 
 	log.Printf("[blue-green] active group: %s, deploying to: %s", activeGroup, newGroup)
 
+	existingContainers, err := o.getContainersByProjectAndGroup(ctx, job.ProjectID, job.Environment, newGroup)
+	if err != nil {
+		log.Printf("[warn] failed to check for existing containers in %s group: %v", newGroup, err)
+	} else if len(existingContainers) > 0 {
+		log.Printf("[blue-green] found %d existing containers in %s group, cleaning up...", len(existingContainers), newGroup)
+		o.broker.PublishLog(job.DeploymentID, "info",
+			fmt.Sprintf("Removing %d existing containers from %s group", len(existingContainers), newGroup))
+		
+		for _, cont := range existingContainers {
+			log.Printf("[cleanup] removing Traefik config for %s", cont.Name)
+			o.RemoveTraefikConfig(cont.Name)
+		}
+		
+		o.cleanupContainersWithDocker(ctx, existingContainers)
+
+		log.Printf("[cleanup] waiting for cleanup to complete...")
+		time.Sleep(3 * time.Second)
+	}
+
 	metadata := map[string]interface{}{
 		"active_group":  activeGroup,
 		"standby_group": newGroup,
@@ -360,6 +379,12 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 		} else {
 			o.broker.PublishLog(job.DeploymentID, "info",
 				fmt.Sprintf("Removing %d old containers", len(oldContainers)))
+			
+			// Remove Traefik configs for old containers
+			for _, cont := range oldContainers {
+				o.RemoveTraefikConfig(cont.Name)
+			}
+			
 			o.cleanupContainersWithDocker(ctx, oldContainers)
 		}
 	}
@@ -454,7 +479,6 @@ func (o *DeploymentOrchestrator) RollingUpdate(ctx context.Context, job Deployme
 			newContainers = append(newContainers, container)
 		}
 
-		// FIXED: Inline health check
 		healthy := true
 		for _, container := range batchContainers {
 			if !o.waitForDockerHealthCheck(ctx, container.ID, 60*time.Second) {
@@ -475,7 +499,10 @@ func (o *DeploymentOrchestrator) RollingUpdate(ctx context.Context, job Deployme
 				toRemove := currentContainers[start:removeEnd]
 
 				time.Sleep(drainPeriod)
+				
+				// Remove Traefik configs before removing containers
 				for _, old := range toRemove {
+					o.RemoveTraefikConfig(old.Name)
 					o.removeContainerWithDocker(ctx, old.ID)
 				}
 			}
@@ -512,6 +539,7 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 
 	healthy := o.waitForDockerHealthCheck(ctx, canaryContainer.ID, 60*time.Second)
 	if !healthy {
+		o.RemoveTraefikConfig(canaryContainer.Name)
 		o.removeContainerWithDocker(ctx, canaryContainer.ID)
 		return o.handleFailure(job, "canary_health", errors.New("canary health check failed"))
 	}
@@ -519,6 +547,7 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 	o.updateStrategyPhase(ctx, job.DeploymentID, "switching_traffic", nil)
 
 	if err := o.routeTrafficToCanary(ctx, job, canaryContainer.ID, canaryPercentage); err != nil {
+		o.RemoveTraefikConfig(canaryContainer.Name)
 		o.removeContainerWithDocker(ctx, canaryContainer.ID)
 		return o.handleFailure(job, "canary_traffic", err)
 	}
@@ -529,6 +558,7 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 
 	select {
 	case <-ctx.Done():
+		o.RemoveTraefikConfig(canaryContainer.Name)
 		o.removeContainerWithDocker(ctx, canaryContainer.ID)
 		return o.handleFailure(job, "canary_monitoring", errors.New("canary monitoring cancelled"))
 	case <-time.After(canaryMonitoring):
@@ -536,6 +566,7 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 		if err != nil || !passed {
 			log.Printf("❌ Canary failed analysis, rolling back")
 			o.routeTrafficToCanary(ctx, job, canaryContainer.ID, 0)
+			o.RemoveTraefikConfig(canaryContainer.Name)
 			o.removeContainerWithDocker(ctx, canaryContainer.ID)
 			return o.handleFailure(job, "canary_analysis", errors.New("canary analysis failed"))
 		}
@@ -548,7 +579,7 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 	o.routeTrafficToCanary(ctx, job, canaryContainer.ID, 100)
 	o.updateContainerGroup(ctx, canaryContainer.ID, "stable", true)
 	log.Printf("[canary] analysis passed, promoting to full deployment")
-	o.updateStrategyPhase(ctx, job.DeploymentID, "completed", nil)	
+	o.updateStrategyPhase(ctx, job.DeploymentID, "completed", nil)
 	o.updateDeploymentStatus(job.DeploymentID, DeploymentStatusActive)
 
 	log.Printf("✅ Canary deployment completed for %s", job.DeploymentID)
@@ -559,8 +590,8 @@ func (o *DeploymentOrchestrator) deployContainer(ctx context.Context, job Deploy
 	tempContainerID := fmt.Sprintf("container_%s_%s_%d_%d", job.DeploymentID, group, replicaIndex, time.Now().Unix())
 
 	deployContainer := &ContainerInfo{
-		ID:              tempContainerID, // This will be replaced with Docker ID
-		Name:            fmt.Sprintf("%s-%s-%d", job.ProjectID, group, replicaIndex),
+		ID:              tempContainerID,
+		Name:            fmt.Sprintf("%s-%s-%s-%d", job.ProjectID, job.Environment, group, replicaIndex),
 		Status:          "starting",
 		Image:           job.ImageTag,
 		Port:            0,
@@ -637,6 +668,7 @@ func (o *DeploymentOrchestrator) deployContainer(ctx context.Context, job Deploy
 	healthy := o.waitForDockerHealthCheck(ctx, createResp.ID, healthCheckTimeout)
 	if !healthy {
 		o.updateContainerStatus(ctx, createResp.ID, "unhealthy", "failed")
+		o.RemoveTraefikConfig(deployContainer.Name)
 		o.dockerClient.ContainerRemove(ctx, createResp.ID, container.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("container failed health checks")
 	}
@@ -655,7 +687,6 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 	deadline := time.Now().Add(timeout)
 	log.Printf("[health] waiting for container %s...", containerID[:12])
 
-	// Wait at least 35 seconds before checking (allow StartPeriod to pass)
 	initialWait := 35 * time.Second
 	log.Printf("[health] waiting %v for container to start...", initialWait)
 	time.Sleep(initialWait)
@@ -672,12 +703,10 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 				continue
 			}
 
-			// Check if container is even running first
 			if !inspect.State.Running {
 				log.Printf("[health] container %s is not running (status: %s, exit code: %d)",
 					containerID[:12], inspect.State.Status, inspect.State.ExitCode)
 
-				// If container exited, get the logs to see why
 				logs, _ := o.getContainerLogs(ctx, containerID)
 				if logs != "" {
 					log.Printf("[health] container %s logs:\n%s", containerID[:12], logs)
@@ -696,13 +725,10 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 					return true
 				}
 
-				// Parse StartedAt time
 				startedAt, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
 				if err != nil {
 					log.Printf("[warn] failed to parse StartedAt time: %v", err)
-					// Continue checking anyway
 				} else {
-					// Only fail if explicitly unhealthy AFTER grace period
 					if healthStatus == "unhealthy" {
 						timeSinceStart := time.Since(startedAt)
 						if timeSinceStart > 35*time.Second {
@@ -716,7 +742,6 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 					}
 				}
 			} else {
-				// No healthcheck configured, just verify it's running
 				if inspect.State.Running {
 					log.Printf("[health] container %s is running (no healthcheck configured)", containerID[:12])
 					return true
@@ -731,7 +756,6 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 	return false
 }
 
-// Helper function to get container logs
 func (o *DeploymentOrchestrator) getContainerLogs(ctx context.Context, containerID string) (string, error) {
 	options := container.LogsOptions{
 		ShowStdout: true,
@@ -770,7 +794,6 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 		healthCheckPath = "/health"
 	}
 
-	// SAFETY CHECK: Ensure minimum PidsLimit for Node.js applications
 	minPidsLimit := int64(512)
 	adjustedPidsLimit := config.PidsLimit
 	if adjustedPidsLimit < minPidsLimit {
@@ -818,7 +841,7 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 			CPUPeriod:   100000,
 			Memory:      config.MemoryLimit,
 			MemorySwap:  config.MemoryLimit,
-			PidsLimit:   &adjustedPidsLimit, // Use adjusted limit
+			PidsLimit:   &adjustedPidsLimit,
 			BlkioWeight: 500,
 			Ulimits: []*units.Ulimit{
 				{Name: "nofile", Soft: 1024, Hard: 2048},
@@ -853,10 +876,10 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 		MaskedPaths:   config.MaskedPaths,
 		ReadonlyPaths: config.ReadOnlyPaths,
 		Tmpfs: map[string]string{
-			"/tmp":       "rw,noexec,nosuid,size=200m", // INCREASED from 100m
-			"/var/tmp":   "rw,noexec,nosuid,size=200m", // INCREASED from 100m
-			"/var/run":   "rw,noexec,nosuid,size=100m", // INCREASED from 50m
-			"/var/cache": "rw,noexec,nosuid,size=500m", // INCREASED from 200m
+			"/tmp":       "rw,noexec,nosuid,size=200m",
+			"/var/tmp":   "rw,noexec,nosuid,size=200m",
+			"/var/run":   "rw,noexec,nosuid,size=100m",
+			"/var/cache": "rw,noexec,nosuid,size=500m",
 		},
 		Mounts: o.buildSecureMounts(job, config),
 		LogConfig: container.LogConfig{
@@ -874,7 +897,18 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 		AutoRemove:    false,
 	}
 
-	return containerConfig, hostConfig, nil
+	networkConfig := &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			"obtura_dev": {
+				Aliases: []string{
+					deployContainer.Name,
+					fmt.Sprintf("%s-%s", job.ProjectID, job.Environment),
+				},
+			},
+		},
+	}
+
+	return containerConfig, hostConfig, networkConfig
 }
 
 func (o *DeploymentOrchestrator) buildSecureMounts(job DeploymentJob, config security.DeploymentSandboxConfig) []mount.Mount {
@@ -1327,7 +1361,6 @@ func (o *DeploymentOrchestrator) detectDependencies(ctx context.Context, job Dep
 		return nil, fmt.Errorf("architecture not found in build metadata")
 	}
 
-	// FIXED: Direct type assertion instead of marshal/unmarshal cycle
 	var dependencies detection.ServiceDependencies
 	archJSON, err := json.Marshal(archData)
 	if err != nil {
@@ -1412,7 +1445,9 @@ func (o *DeploymentOrchestrator) Rollback(ctx context.Context, deploymentID, tar
 		return fmt.Errorf("failed to record rollback: %w", err)
 	}
 
+	// Remove Traefik configs for current containers before removing them
 	for _, cont := range currentContainers {
+		o.RemoveTraefikConfig(cont.Name)
 		o.removeContainerWithDocker(ctx, cont.ID)
 	}
 

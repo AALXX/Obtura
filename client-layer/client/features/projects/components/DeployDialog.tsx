@@ -84,7 +84,7 @@ const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, bui
             </div>
 
             {/* Content */}
-            <div className="max-h-[70vh] p-6">
+            <div className="p-6">
                 <div className="space-y-6">
                     <div>
                         <label className="mb-3 block text-sm font-medium">Deployment Environment</label>
