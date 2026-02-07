@@ -1,7 +1,7 @@
 'use client'
 import React, { useRef, useState } from 'react'
-import { Rocket, Settings, Activity, Database, Globe, GitBranch, Clock, CheckCircle2, XCircle, AlertCircle, Eye, Code, Server, Lock, RotateCcw, Play, Pause, Plus, Trash2, Copy, ExternalLink, TrendingUp, Zap, Shield, Layers, Package, Hammer, Upload, Calendar, Save, Loader2 } from 'lucide-react'
-import { Build, BuildStatus, DeploymentConfig, ProjectData } from './Types/ProjectTypes'
+import { Rocket, Settings, Activity, Globe, GitBranch, Clock, CheckCircle2, XCircle, AlertCircle, Eye, Code, Server, Lock, RotateCcw, Play, Pause, Plus, Trash2, Copy, ExternalLink, TrendingUp, Zap, Shield, Layers, Package, Hammer, Upload, Calendar, Save, Loader2 } from 'lucide-react'
+import { Build, BuildStatus, DeploymentConfig, Deployment, ProjectData } from './Types/ProjectTypes'
 import EnvFileUpload from '../account/components/EnvFileUpload'
 import DialogCanvas from '@/common-components/DialogCanvas'
 import axios from 'axios'
@@ -10,9 +10,11 @@ import BuildLogsViewer from './components/BuildLogsViewer'
 import EnvVarsCard from './components/EnvVarCard'
 import { useBuildUpdates } from '@/hooks/useBuildUpdates'
 import DeployDialog from './components/DeployDialog'
+import DeploymentLogsViewer from './components/DeploymentLogsViewer'
+import { useDeploymentUpdates } from '@/hooks/useDeployuseDeploymentUpdates'
 
 const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; services: { service_name: string; env_vars: Record<string, string> }[] }> = ({ projectData, accessToken, services }) => {
-    const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'environment' | 'settings' | 'monitoring' | 'builds'>('overview')
+    const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'deploymentHistory' | 'environment' | 'settings' | 'monitoring' | 'builds'>('overview')
 
     const [envVars, setEnvVars] = useState<{ key: string; value: string; service: string }[]>(
         services.flatMap(service =>
@@ -49,13 +51,42 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     const [deploymentStrategy, setDeploymentStrategy] = useState(projectData.production?.deploymentStrategy || 'blue_green')
     const [enableMonitoring, setEnableMonitoring] = useState(true)
     const [autoScaling, setAutoScaling] = useState(false)
+    const [deploymentEnvironment, setDeploymentEnvironment] = useState<'production' | 'staging' | 'preview'>('production')
+
+    const [showDeploymentLogs, setShowDeploymentLogs] = useState(false)
+    const [currentDeploymentId, setCurrentDeploymentId] = useState<string | null>(null)
+
+    const [deployments, setDeployments] = useState<Deployment[]>(
+        projectData.deployments.map(deployment => ({
+            id: deployment.id,
+            environment: deployment.environment,
+            status: deployment.status,
+            deploymentStrategy: deployment.deploymentStrategy,
+            branch: deployment.branch,
+            commitHash: deployment.commitHash,
+            deploymentUrl: deployment.deploymentUrl,
+            deploymentTrigger: deployment.deploymentTrigger,
+            trafficPercentage: deployment.trafficPercentage,
+            replicaCount: deployment.replicaCount,
+            framework: deployment.framework,
+            deployedBy: deployment.deployedBy,
+            startedAt: deployment.startedAt,
+            completedAt: deployment.completedAt,
+            duration: deployment.duration,
+            buildTime: deployment.buildTime,
+            strategyPhase: deployment.strategyPhase,
+            trafficSwitchCount: deployment.trafficSwitchCount,
+            errorMessage: deployment.errorMessage
+        }))
+    )
+    const liveDeployments = useDeploymentUpdates(projectData.id, deployments)
 
     const [builds, setBuilds] = useState<Build[]>(
         projectData.builds.map(build => ({
             id: build.id,
             status: build.status === 'completed' ? 'success' : (build.status as BuildStatus),
             branch: build.branch,
-            commit: build.commit,
+            commitHash: build.commitHash,
             startTime: build.createdAt,
             duration: build.buildTime || undefined,
             framework: build.framework || undefined,
@@ -86,7 +117,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
             const deployUrl = config.buildId ? `trigger-deploy?buildId=${config.buildId}` : `trigger-deploy`
 
-            const resp = await axios.post<{ buildId: string }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/${deployUrl}`, {
+            const resp = await axios.post<{ buildId: string; deploymentId: string; environment: string; branch: string; commitHash: string }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/${deployUrl}`, {
                 accessToken: accessToken,
                 projectId: projectData.id,
                 environment: config.environment,
@@ -99,12 +130,46 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 return
             }
 
+            // Add new deployment to state
+            if (resp.data.deploymentId) {
+                const newDeployment: Deployment = {
+                    id: resp.data.deploymentId,
+                    environment: resp.data.environment as 'production' | 'staging' | 'preview',
+                    status: 'pending',
+                    deploymentStrategy: config.strategy as 'blue_green' | 'rolling' | 'canary' | 'recreate',
+                    branch: resp.data.branch,
+                    commitHash: resp.data.commitHash,
+                    deploymentUrl: '',
+                    deploymentTrigger: 'manual',
+                    trafficPercentage: 0,
+                    replicaCount: 1,
+                    framework: null,
+                    deployedBy: null,
+                    startedAt: 'Just now',
+                    completedAt: null,
+                    duration: null,
+                    buildTime: null,
+                    strategyPhase: 'preparing',
+                    trafficSwitchCount: 0,
+                    errorMessage: null
+                }
+
+                setDeployments(prev => [newDeployment, ...prev])
+
+                // Show deployment logs viewer
+                setCurrentDeploymentId(resp.data.deploymentId)
+                setDeploymentEnvironment(config.environment || 'production')
+                setDeploymentStrategy(config.strategy || 'blue_green')
+                setShowDeploymentLogs(true)
+                setShowDeployDialog(false)
+            }
+
             setIsDeploying(false)
         } catch (error) {
             alert("There's an error in your deployment configuration")
+            setIsDeploying(false)
         }
     }
-
     const handleAddEnvVar = () => {
         if (newEnvKey && newEnvValue && (selectedService !== '__new__' ? selectedService : newEnvService)) {
             const service = selectedService === '__new__' ? newEnvService : selectedService
@@ -226,7 +291,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 id: newBuildId,
                 status: 'queued',
                 branch: resp.data.branch || 'main',
-                commit: resp.data.commitHash?.substring(0, 7) || 'pending...',
+                commitHash: resp.data.commitHash?.substring(0, 7) || 'pending...',
                 startTime: new Date().toLocaleString(),
                 duration: undefined
             }
@@ -284,6 +349,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     const tabs = [
         { id: 'overview', label: 'Overview', icon: Activity },
         { id: 'deployments', label: 'Deployments', icon: Rocket },
+        { id: 'deploymentHistory', label: 'History', icon: Calendar },
         { id: 'environment', label: 'Environment', icon: Lock },
         { id: 'settings', label: 'Settings', icon: Settings },
         { id: 'monitoring', label: 'Monitoring', icon: TrendingUp },
@@ -373,6 +439,21 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 </DialogCanvas>
             )}
 
+            {showDeploymentLogs && currentDeploymentId && (
+                <DialogCanvas closeDialog={() => setShowDeploymentLogs(false)}>
+                    <DeploymentLogsViewer
+                        deploymentId={currentDeploymentId}
+                        projectId={projectData.id}
+                        environment={deploymentEnvironment}
+                        strategy={deploymentStrategy}
+                        onClose={() => {
+                            setShowDeploymentLogs(false)
+                            setCurrentDeploymentId(null)
+                        }}
+                    />
+                </DialogCanvas>
+            )}
+
             {showDeployDialog && (
                 <DialogCanvas closeDialog={() => setShowDeployDialog(false)}>
                     <DeployDialog accessToken={accessToken} projectId={projectData.id} builds={projectData.builds} currentBranch={projectData.production.branch || 'main'} deploymentStrategy={projectData.production.deploymentStrategy || 'blue_green'} onDeploy={handleDeploy} onClose={() => setShowDeployDialog(false)} />
@@ -403,239 +484,390 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                             <p className="text-sm text-zinc-400">Manage and monitor your production and staging deployments</p>
                         </div>
 
-                        {/* Production Environment */}
-                        {projectData.production.url && (
-                            <div className="space-y-6">
-                                <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-6">
-                                    <div className="mb-6 flex items-center justify-between">
-                                        <div className="flex items-center gap-4">
-                                            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-green-500/10">
-                                                <Globe className="text-green-500" size={24} />
-                                            </div>
-                                            <div>
-                                                <a href={`https://${projectData.production.url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-lg font-semibold">
-                                                    {projectData.production.url}
-                                                    <ExternalLink size={12} />
-                                                </a>
-                                                <div className="flex items-center gap-3">
-                                                    <h3 className="text-sm text-zinc-400 hover:text-white">Production</h3>
-                                                    <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${projectData.staging.status === 'active' ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'}`}>
-                                                        <CheckCircle2 size={12} />
-                                                        {projectData.production.status || 'Unknown'}
-                                                    </span>
-                                                </div>
-                                            </div>
+                        {(() => {
+                            const deployments = []
+
+                            if (projectData.production.url) {
+                                deployments.push({
+                                    type: 'production',
+                                    icon: Globe,
+                                    iconColor: 'text-green-500',
+                                    iconBg: 'bg-green-500/10',
+                                    statusColor: projectData.production.status === 'active' ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500',
+                                    ...projectData.production
+                                })
+                            }
+
+                            if (projectData.staging.url) {
+                                deployments.push({
+                                    type: 'staging',
+                                    icon: Server,
+                                    iconColor: 'text-blue-500',
+                                    iconBg: 'bg-blue-500/10',
+                                    statusColor: projectData.staging.status === 'active' ? 'bg-blue-500/10 text-blue-500' : 'bg-zinc-500/10 text-zinc-500',
+                                    ...projectData.staging
+                                })
+                            }
+
+                            if (projectData.preview && projectData.preview.length > 0) {
+                                projectData.preview.forEach(preview => {
+                                    deployments.push({
+                                        type: 'preview',
+                                        icon: GitBranch,
+                                        iconColor: 'text-purple-500',
+                                        iconBg: 'bg-purple-500/10',
+                                        statusColor: 'bg-purple-500/10 text-purple-500',
+                                        url: preview.url,
+                                        branch: preview.branch,
+                                        lastDeployment: preview.createdAt,
+                                        status: 'active',
+                                        containers: [],
+                                        totalContainers: 0,
+                                        healthyContainers: 0,
+                                        unhealthyContainers: 0,
+                                        unresolvedAlerts: [],
+                                        unresolvedAlertCount: 0
+                                    })
+                                })
+                            }
+
+                            if (deployments.length === 0) {
+                                return (
+                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-12 text-center">
+                                        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900">
+                                            <Rocket className="text-zinc-600" size={32} />
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            <button className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
-                                                <Eye size={16} />
-                                                View Logs
-                                            </button>
-                                            <button disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                                                <RotateCcw size={16} />
-                                                Redeploy
-                                            </button>
-                                        </div>
+                                        <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Active Deployments</h3>
+                                        <p className="mb-6 text-sm text-zinc-500">Deploy your project to production or staging to see deployment details here</p>
+                                        <button className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-medium text-white hover:bg-orange-600">
+                                            <Rocket size={18} />
+                                            Deploy to Production
+                                        </button>
                                     </div>
+                                )
+                            }
 
-                                    {/* Deployment Strategy & Metrics */}
-                                    <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-                                        <div className="rounded-lg bg-zinc-900/50 p-4">
-                                            <div className="text-sm text-zinc-400">Strategy</div>
-                                            <div className="font-semibold text-blue-400">{projectData.production.deploymentStrategy || 'N/A'}</div>
-                                        </div>
-                                        <div className="rounded-lg bg-zinc-900/50 p-4">
-                                            <div className="text-sm text-zinc-400">Traffic</div>
-                                            <div className="font-semibold">{projectData.production.trafficPercentage || 0}%</div>
-                                        </div>
-                                        <div className="rounded-lg bg-zinc-900/50 p-4">
-                                            <div className="text-sm text-zinc-400">Requests/min</div>
-                                            <div className="font-semibold">{projectData.production.currentRequestsPerMinute || 0}</div>
-                                        </div>
-                                        <div className="rounded-lg bg-zinc-900/50 p-4">
-                                            <div className="text-sm text-zinc-400">Response Time</div>
-                                            <div className="font-semibold">{projectData.production.avgResponseTime}</div>
-                                        </div>
-                                    </div>
+                            return deployments.map((deployment, index) => {
+                                const Icon = deployment.icon
+                                const isProduction = deployment.type === 'production'
 
-                                    {/* Strategy Details */}
-                                    {projectData.production.strategyDetails && (
-                                        <div className="mb-6 rounded-lg border border-zinc-700 bg-zinc-900/30 p-4">
-                                            <h4 className="mb-3 font-semibold">Deployment Strategy Details</h4>
-                                            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
-                                                <div>
-                                                    <div className="text-zinc-400">Phase</div>
-                                                    <div className="font-medium capitalize">{projectData.production.strategyDetails.currentPhase}</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-zinc-400">Active Group</div>
-                                                    <div className="font-medium">{projectData.production.strategyDetails.activeGroup || 'None'}</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-zinc-400">Total Replicas</div>
-                                                    <div className="font-medium">{projectData.production.strategyDetails.totalReplicas}</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-zinc-400">Healthy Replicas</div>
-                                                    <div className="font-medium text-green-500">{projectData.production.strategyDetails.healthyReplicas}</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Containers */}
-                                    <div className="mb-6">
-                                        <h4 className="mb-3 font-semibold">Containers ({projectData.production.totalContainers})</h4>
-                                        <div className="space-y-3">
-                                            {projectData.production.containers.map(container => (
-                                                <div key={container.id} className="rounded-lg border border-zinc-700 bg-zinc-900/50 p-4">
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="flex items-center gap-3">
-                                                            <div className={`h-3 w-3 rounded-full ${container.healthStatus === 'healthy' ? 'bg-green-500' : container.healthStatus === 'unhealthy' ? 'bg-red-500' : 'bg-yellow-500'}`}></div>
-                                                            <div>
-                                                                <div className="font-medium">{container.name}</div>
-                                                                <div className="text-xs text-zinc-400">ID: {container.id.slice(0, 8)}...</div>
-                                                            </div>
-                                                        </div>
-                                                        <div className="flex items-center gap-4 text-sm">
-                                                            <span className={`rounded-full px-2 py-1 text-xs ${container.isActive ? 'bg-green-500/10 text-green-500' : 'bg-zinc-500/10 text-zinc-500'}`}>{container.status}</span>
-                                                            <span className="text-zinc-400">{container.deploymentGroup}</span>
-                                                        </div>
+                                return (
+                                    <div key={`${deployment.type}-${index}`} className="space-y-6">
+                                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-6">
+                                            <div className="mb-6 flex items-center justify-between">
+                                                <div className="flex items-center gap-4">
+                                                    <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${deployment.iconBg}`}>
+                                                        <Icon className={deployment.iconColor} size={24} />
                                                     </div>
-                                                    <div className="mt-3 grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
-                                                        <div>
-                                                            <div className="text-zinc-400">CPU Usage</div>
-                                                            <div className="font-medium">{container.cpuUsage ? `${container.cpuUsage}%` : 'N/A'}</div>
-                                                        </div>
-                                                        <div>
-                                                            <div className="text-zinc-400">Memory</div>
-                                                            <div className="font-medium">{container.memoryUsage ? `${container.memoryUsage}MB` : 'N/A'}</div>
-                                                        </div>
-                                                        <div>
-                                                            <div className="text-zinc-400">Started</div>
-                                                            <div className="font-medium">{new Date(container.startedAt).toLocaleString()}</div>
-                                                        </div>
-                                                        <div>
-                                                            <div className="text-zinc-400">Health</div>
-                                                            <div className={`font-medium capitalize ${container.healthStatus === 'healthy' ? 'text-green-500' : container.healthStatus === 'unhealthy' ? 'text-red-500' : 'text-yellow-500'}`}>{container.healthStatus}</div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {/* Alerts */}
-                                    {projectData.production.unresolvedAlerts.length > 0 && (
-                                        <div className="mb-6">
-                                            <h4 className="mb-3 font-semibold text-red-400">Unresolved Alerts ({projectData.production.unresolvedAlertCount})</h4>
-                                            <div className="space-y-2">
-                                                {projectData.production.unresolvedAlerts.slice(0, 3).map(alert => (
-                                                    <div key={alert.id} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                                                    <div>
+                                                        <a href={`https://${deployment.url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-lg font-semibold">
+                                                            {deployment.url}
+                                                            <ExternalLink size={12} />
+                                                        </a>
                                                         <div className="flex items-center gap-3">
-                                                            <AlertCircle className="text-red-500" size={16} />
-                                                            <div className="flex-1">
-                                                                <div className="text-sm font-medium">{alert.message}</div>
-                                                                <div className="text-xs text-zinc-400">{new Date(alert.timestamp).toLocaleString()}</div>
-                                                            </div>
-                                                            <span className={`rounded-full px-2 py-1 text-xs ${alert.severity === 'critical' ? 'bg-red-500/10 text-red-500' : alert.severity === 'high' ? 'bg-orange-500/10 text-orange-500' : alert.severity === 'medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-blue-500/10 text-blue-500'}`}>
-                                                                {alert.severity}
+                                                            <h3 className="text-sm text-zinc-400 capitalize hover:text-white">{deployment.type}</h3>
+                                                            <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${deployment.statusColor}`}>
+                                                                <CheckCircle2 size={12} />
+                                                                {deployment.status || 'Unknown'}
                                                             </span>
                                                         </div>
                                                     </div>
-                                                ))}
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <button className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
+                                                        <Eye size={16} />
+                                                        View Logs
+                                                    </button>
+                                                    <button disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                                                        <RotateCcw size={16} />
+                                                        Redeploy
+                                                    </button>
+                                                </div>
                                             </div>
-                                        </div>
-                                    )}
 
-                                    {/* Deployment Info */}
-                                    <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
-                                        <div>
-                                            <div className="text-zinc-400">Last Deployment</div>
-                                            <div className="font-medium">{projectData.production.lastDeployment}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-zinc-400">Branch</div>
-                                            <div className="font-medium">{projectData.production.branch || 'N/A'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-zinc-400">Build Time</div>
-                                            <div className="font-medium">{projectData.production.buildTime || 'N/A'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-zinc-400">Framework</div>
-                                            <div className="font-medium">{projectData.production.framework || 'N/A'}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                                            {/* Only show detailed metrics for production/staging, not preview */}
+                                            {deployment.type !== 'preview' && (
+                                                <>
+                                                    {/* Deployment Strategy & Metrics */}
+                                                    {deployment.deploymentStrategy && (
+                                                        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                                                            <div className="rounded-lg bg-zinc-900/50 p-4">
+                                                                <div className="text-sm text-zinc-400">Strategy</div>
+                                                                <div className="font-semibold text-blue-400">{deployment.deploymentStrategy || 'N/A'}</div>
+                                                            </div>
+                                                            <div className="rounded-lg bg-zinc-900/50 p-4">
+                                                                <div className="text-sm text-zinc-400">Traffic</div>
+                                                                <div className="font-semibold">{deployment.trafficPercentage || 0}%</div>
+                                                            </div>
+                                                            <div className="rounded-lg bg-zinc-900/50 p-4">
+                                                                <div className="text-sm text-zinc-400">Requests/min</div>
+                                                                <div className="font-semibold">{deployment.currentRequestsPerMinute || 0}</div>
+                                                            </div>
+                                                            <div className="rounded-lg bg-zinc-900/50 p-4">
+                                                                <div className="text-sm text-zinc-400">Response Time</div>
+                                                                <div className="font-semibold">{deployment.avgResponseTime}</div>
+                                                            </div>
+                                                        </div>
+                                                    )}
 
-                        {/* Staging Environment */}
-                        {projectData.staging.url && (
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-6">
-                                <div className="mb-6 flex items-center justify-between">
-                                    <div className="flex items-center gap-4">
-                                        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-500/10">
-                                            <Server className="text-blue-500" size={24} />
-                                        </div>
-                                        <div>
-                                            {projectData.staging.url && (
-                                                <a href={`https://${projectData.staging.url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-lg font-semibold">
-                                                    {projectData.staging.url}
-                                                    <ExternalLink size={18} />
-                                                </a>
+                                                    {/* Strategy Details */}
+                                                    {deployment.strategyDetails && (
+                                                        <div className="mb-6 rounded-lg border border-zinc-700 bg-zinc-900/30 p-4">
+                                                            <h4 className="mb-3 font-semibold">Deployment Strategy Details</h4>
+                                                            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                                                <div>
+                                                                    <div className="text-zinc-400">Phase</div>
+                                                                    <div className="font-medium capitalize">{deployment.strategyDetails.currentPhase}</div>
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-zinc-400">Active Group</div>
+                                                                    <div className="font-medium">{deployment.strategyDetails.activeGroup || 'None'}</div>
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-zinc-400">Total Replicas</div>
+                                                                    <div className="font-medium">{deployment.strategyDetails.totalReplicas}</div>
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-zinc-400">Healthy Replicas</div>
+                                                                    <div className="font-medium text-green-500">{deployment.strategyDetails.healthyReplicas}</div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Containers */}
+                                                    {deployment.containers && deployment.containers.length > 0 && (
+                                                        <div className="mb-6">
+                                                            <h4 className="mb-3 font-semibold">Containers ({deployment.totalContainers})</h4>
+                                                            <div className="space-y-3">
+                                                                {deployment.containers.map(container => (
+                                                                    <div key={container.id} className="rounded-lg border border-zinc-700 bg-zinc-900/50 p-4">
+                                                                        <div className="flex items-center justify-between">
+                                                                            <div className="flex items-center gap-3">
+                                                                                <div className={`h-3 w-3 rounded-full ${container.healthStatus === 'healthy' ? 'bg-green-500' : container.healthStatus === 'unhealthy' ? 'bg-red-500' : 'bg-yellow-500'}`}></div>
+                                                                                <div>
+                                                                                    <div className="font-medium">{container.name}</div>
+                                                                                    <div className="text-xs text-zinc-400">ID: {container.id.slice(0, 8)}...</div>
+                                                                                </div>
+                                                                            </div>
+                                                                            <div className="flex items-center gap-4 text-sm">
+                                                                                <span className={`rounded-full px-2 py-1 text-xs ${container.isActive ? 'bg-green-500/10 text-green-500' : 'bg-zinc-500/10 text-zinc-500'}`}>{container.status}</span>
+                                                                                <span className="text-zinc-400">{container.deploymentGroup}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="mt-3 grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                                                            <div>
+                                                                                <div className="text-zinc-400">CPU Usage</div>
+                                                                                <div className="font-medium">{container.cpuUsage ? `${container.cpuUsage}%` : 'N/A'}</div>
+                                                                            </div>
+                                                                            <div>
+                                                                                <div className="text-zinc-400">Memory</div>
+                                                                                <div className="font-medium">{container.memoryUsage ? `${container.memoryUsage}MB` : 'N/A'}</div>
+                                                                            </div>
+                                                                            <div>
+                                                                                <div className="text-zinc-400">Started</div>
+                                                                                <div className="font-medium">{new Date(container.startedAt).toLocaleString()}</div>
+                                                                            </div>
+                                                                            <div>
+                                                                                <div className="text-zinc-400">Health</div>
+                                                                                <div className={`font-medium capitalize ${container.healthStatus === 'healthy' ? 'text-green-500' : container.healthStatus === 'unhealthy' ? 'text-red-500' : 'text-yellow-500'}`}>{container.healthStatus}</div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Alerts */}
+                                                    {deployment.unresolvedAlerts && deployment.unresolvedAlerts.length > 0 && (
+                                                        <div className="mb-6">
+                                                            <h4 className="mb-3 font-semibold text-red-400">Unresolved Alerts ({deployment.unresolvedAlertCount})</h4>
+                                                            <div className="space-y-2">
+                                                                {deployment.unresolvedAlerts.slice(0, 3).map(alert => (
+                                                                    <div key={alert.id} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                                                                        <div className="flex items-center gap-3">
+                                                                            <AlertCircle className="text-red-500" size={16} />
+                                                                            <div className="flex-1">
+                                                                                <div className="text-sm font-medium">{alert.message}</div>
+                                                                                <div className="text-xs text-zinc-400">{new Date(alert.timestamp).toLocaleString()}</div>
+                                                                            </div>
+                                                                            <span
+                                                                                className={`rounded-full px-2 py-1 text-xs ${alert.severity === 'critical' ? 'bg-red-500/10 text-red-500' : alert.severity === 'high' ? 'bg-orange-500/10 text-orange-500' : alert.severity === 'medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-blue-500/10 text-blue-500'}`}
+                                                                            >
+                                                                                {alert.severity}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </>
                                             )}
-                                            <div className="mb-1 flex items-center gap-3">
-                                                <h3 className="text-sm text-zinc-400 hover:text-white">Staging</h3>
-                                                <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${projectData.staging.status === 'active' ? 'bg-blue-500/10 text-blue-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
-                                                    <CheckCircle2 size={10} />
-                                                    {projectData.staging.status || 'Inactive'}
-                                                </span>
+
+                                            {/* Deployment Info */}
+                                            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                                <div>
+                                                    <div className="text-zinc-400">Last Deployment</div>
+                                                    <div className="font-medium">{deployment.lastDeployment}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-zinc-400">Branch</div>
+                                                    <div className="font-medium">{deployment.branch || 'N/A'}</div>
+                                                </div>
+                                                {deployment.buildTime && (
+                                                    <div>
+                                                        <div className="text-zinc-400">Build Time</div>
+                                                        <div className="font-medium">{deployment.buildTime}</div>
+                                                    </div>
+                                                )}
+                                                {deployment.framework && (
+                                                    <div>
+                                                        <div className="text-zinc-400">Framework</div>
+                                                        <div className="font-medium">{deployment.framework}</div>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-3">
-                                        <button className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
-                                            <Rocket size={16} />
-                                            Deploy
-                                        </button>
-                                    </div>
-                                </div>
+                                )
+                            })
+                        })()}
+                    </div>
+                )}
 
-                                <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
-                                    <div>
-                                        <div className="text-zinc-400">Last Deployment</div>
-                                        <div className="font-medium">{projectData.staging.lastDeployment || 'Never'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-zinc-400">Branch</div>
-                                        <div className="font-medium">{projectData.staging.branch || 'N/A'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-zinc-400">Build Time</div>
-                                        <div className="font-medium">{projectData.staging.buildTime || 'N/A'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-zinc-400">Framework</div>
-                                        <div className="font-medium">{projectData.staging.framework || 'N/A'}</div>
-                                    </div>
-                                </div>
+                {activeTab === 'deploymentHistory' && (
+                    <div className="space-y-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h2 className="text-xl font-semibold">Deployment History</h2>
+                                <p className="text-sm text-zinc-400">Showing {projectData.deployments.length} recent deployments</p>
                             </div>
-                        )}
+                        </div>
 
-                        {/* No Deployments State */}
-                        {!projectData.production.url && !projectData.staging.url && (
+                        {projectData.deployments.length === 0 ? (
                             <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-12 text-center">
                                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900">
                                     <Rocket className="text-zinc-600" size={32} />
                                 </div>
-                                <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Active Deployments</h3>
-                                <p className="mb-6 text-sm text-zinc-500">Deploy your project to production or staging to see deployment details here</p>
-                                <button className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-medium text-white hover:bg-orange-600">
-                                    <Rocket size={18} />
-                                    Deploy to Production
-                                </button>
+                                <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Deployments Yet</h3>
+                                <p className="mb-6 text-sm text-zinc-500">Your deployment history will appear here</p>
+                            </div>
+                        ) : (
+                            <div className="overflow-hidden rounded-lg border border-zinc-800 bg-[#1b1b1b]">
+                                <table className="w-full">
+                                    <thead className="border-b border-zinc-800 bg-zinc-900/50">
+                                        <tr>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Status</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Environment</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Branch</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Commit</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Strategy</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Deployed</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Duration</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Traffic</th>
+                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-zinc-800">
+                                        {liveDeployments.map(deployment => {
+                                            const getStatusDisplay = () => {
+                                                switch (deployment.status) {
+                                                    case 'pending':
+                                                        return { icon: Clock, text: 'Pending', color: 'text-blue-500', bgColor: 'bg-blue-500/10' }
+                                                    case 'deploying':
+                                                        return { icon: Loader2, text: 'Deploying', color: 'text-orange-500', bgColor: 'bg-orange-500/10', spin: true }
+                                                    case 'active':
+                                                        return { icon: CheckCircle2, text: 'Active', color: 'text-green-500', bgColor: 'bg-green-500/10' }
+                                                    case 'failed':
+                                                        return { icon: XCircle, text: 'Failed', color: 'text-red-500', bgColor: 'bg-red-500/10' }
+                                                    case 'rolled_back':
+                                                        return { icon: RotateCcw, text: 'Rolled Back', color: 'text-yellow-500', bgColor: 'bg-yellow-500/10' }
+                                                    case 'terminated':
+                                                        return { icon: XCircle, text: 'Terminated', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
+                                                    default:
+                                                        return { icon: Clock, text: 'Unknown', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
+                                                }
+                                            }
+
+                                            const statusDisplay = getStatusDisplay()
+                                            const StatusIcon = statusDisplay.icon
+
+                                            const getEnvironmentColor = () => {
+                                                switch (deployment.environment) {
+                                                    case 'production':
+                                                        return 'bg-green-500/10 text-green-500'
+                                                    case 'staging':
+                                                        return 'bg-blue-500/10 text-blue-500'
+                                                    case 'preview':
+                                                        return 'bg-purple-500/10 text-purple-500'
+                                                    default:
+                                                        return 'bg-zinc-500/10 text-zinc-500'
+                                                }
+                                            }
+
+                                            return (
+                                                <tr key={deployment.id} className="transition-colors hover:bg-zinc-900/50">
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${statusDisplay.bgColor}`}>
+                                                                <StatusIcon className={`${statusDisplay.color} ${statusDisplay.spin ? 'animate-spin' : ''}`} size={16} />
+                                                            </div>
+                                                            <span className={`text-sm font-medium ${statusDisplay.color}`}>{statusDisplay.text}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${getEnvironmentColor()}`}>{deployment.environment}</span>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex items-center gap-1.5 text-sm text-zinc-300">
+                                                            <GitBranch size={14} className="text-zinc-500" />
+                                                            {deployment.branch}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="font-mono text-xs text-zinc-400">{deployment.commitHash.substring(0, 7)}</div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="text-sm text-zinc-400 capitalize">{deployment.deploymentStrategy.replace('_', ' ')}</div>
+                                                        {deployment.strategyPhase && <div className="text-xs text-zinc-600">{deployment.strategyPhase}</div>}
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="text-sm text-zinc-400">{deployment.startedAt}</div>
+                                                        {deployment.deployedBy && <div className="text-xs text-zinc-600">{deployment.deployedBy}</div>}
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="text-sm text-zinc-400">{deployment.duration || '-'}</div>
+                                                        {deployment.buildTime && <div className="text-xs text-zinc-600">Build: {deployment.buildTime}</div>}
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="text-sm text-zinc-400">{deployment.trafficPercentage}%</div>
+                                                        {deployment.trafficSwitchCount > 0 && (
+                                                            <div className="flex items-center gap-1 text-xs text-blue-400">
+                                                                <TrendingUp size={12} />
+                                                                {deployment.trafficSwitchCount} switch{deployment.trafficSwitchCount > 1 ? 'es' : ''}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <button
+                                                            className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
+                                                            onClick={() => {
+                                                                setCurrentDeploymentId(deployment.id)
+                                                                setDeploymentEnvironment(deployment.environment)
+                                                                setDeploymentStrategy(deployment.deploymentStrategy)
+                                                                setShowDeploymentLogs(true)
+                                                            }}
+                                                        >
+                                                            <Eye size={16} />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            )
+                                        })}
+                                    </tbody>
+                                </table>
                             </div>
                         )}
                     </div>
@@ -785,7 +1017,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Commit</div>
-                                                    <div className="truncate font-medium">{projectData.production.commit || 'N/A'}</div>
+                                                    <div className="truncate font-medium">{projectData.production.commitHash || 'N/A'}</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -834,7 +1066,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Commit</div>
-                                                    <div className="truncate font-medium">{projectData.staging.commit || 'N/A'}</div>
+                                                    <div className="truncate font-medium">{projectData.staging.commitHash || 'N/A'}</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -1363,7 +1595,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                             </div>
                                                         </td>
                                                         <td className="px-6 py-4">
-                                                            <div className="font-mono text-xs text-zinc-400">{build.commit.substring(0, 7)}</div>
+                                                            <div className="font-mono text-xs text-zinc-400">{build.commitHash.substring(0, 7)}</div>
                                                         </td>
                                                         <td className="px-6 py-4">
                                                             <div className="text-sm text-zinc-400">{build.startTime}</div>

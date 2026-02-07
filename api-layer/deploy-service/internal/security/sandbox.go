@@ -2,6 +2,7 @@ package security
 
 import (
 	"time"
+
 	"github.com/docker/go-units"
 )
 
@@ -14,45 +15,45 @@ type DeploymentSandboxConfig struct {
 	StorageLimit int64
 
 	// Network Security
-	NetworkMode    string   // "none", "bridge", "obtura_dev"
-	NetworkName    string   // Actual network name to connect to
-	AllowedPorts   []int
-	DNSServers     []string
-	ExposeToHost   bool     // Whether to expose ports to host
-	HostPortStart  int      // Starting port for host bindings
+	NetworkMode   string // "none", "bridge", "obtura_dev"
+	NetworkName   string // Actual network name to connect to
+	AllowedPorts  []int
+	DNSServers    []string
+	ExposeToHost  bool // Whether to expose ports to host
+	HostPortStart int  // Starting port for host bindings
 
 	// Security Options
 	NoNewPrivs    bool
 	ReadOnlyRoot  bool
 	MaskedPaths   []string
 	ReadOnlyPaths []string
-	
 
 	// Runtime Options
 	Environment    string
 	HealthCheckURL string
 	StartupTimeout time.Duration
-	
+
 	// Traefik Integration
 	EnableTraefik bool
 	TraefikHost   string // e.g., "project-id.s3rbvn.org"
 }
 
 // GetDefaultDeploymentConfig returns secure defaults based on plan tier
+// GetDefaultDeploymentConfig returns secure defaults based on plan tier
 func GetDefaultDeploymentConfig(planTier string, environment string) DeploymentSandboxConfig {
 	baseConfig := DeploymentSandboxConfig{
 		NoNewPrivs:     true,
-		ReadOnlyRoot:   true,
-		NetworkMode:    "obtura_dev",        // Use shared network
-		NetworkName:    "obtura_dev",        // Explicit network name
+		ReadOnlyRoot:   false, // CHANGED: false by default for Node.js
+		NetworkMode:    "obtura_dev",
+		NetworkName:    "obtura_dev",
 		Environment:    environment,
 		HealthCheckURL: "/health",
 		StartupTimeout: 120 * time.Second,
 		DNSServers:     []string{"1.1.1.1", "1.0.0.1"},
-		ExposeToHost:   false,                // Enable host port exposure
-		HostPortStart:  9100,                // Start assigning from port 9000
-		EnableTraefik:  true,                // Enable Traefik routing
-		TraefikHost:    "",                  // Will be set per deployment
+		ExposeToHost:   false,
+		HostPortStart:  9100,
+		EnableTraefik:  true,
+		TraefikHost:    "",
 
 		// Default security hardening
 		MaskedPaths: []string{
@@ -81,29 +82,29 @@ func GetDefaultDeploymentConfig(planTier string, environment string) DeploymentS
 	switch planTier {
 	case "starter":
 		baseConfig.CPUQuota = 100000
-		baseConfig.MemoryLimit = 536870912
-		baseConfig.PidsLimit = 128
+		baseConfig.MemoryLimit = 536870912 // 512MB
+		baseConfig.PidsLimit = 512         // INCREASED from 128
 		baseConfig.StorageLimit = 5 * units.GiB
 		baseConfig.AllowedPorts = []int{8080}
 
 	case "team":
 		baseConfig.CPUQuota = 200000
-		baseConfig.MemoryLimit = 1073741824
-		baseConfig.PidsLimit = 256
+		baseConfig.MemoryLimit = 1073741824 // 1GB
+		baseConfig.PidsLimit = 1024         // INCREASED from 256
 		baseConfig.StorageLimit = 20 * units.GiB
 		baseConfig.AllowedPorts = []int{8080, 8443}
 
 	case "business":
 		baseConfig.CPUQuota = 400000
-		baseConfig.MemoryLimit = 2147483648
-		baseConfig.PidsLimit = 512
+		baseConfig.MemoryLimit = 2147483648 // 2GB
+		baseConfig.PidsLimit = 2048         // INCREASED from 512
 		baseConfig.StorageLimit = 50 * units.GiB
 		baseConfig.AllowedPorts = []int{8080, 8443, 9090}
 
 	case "enterprise":
 		baseConfig.CPUQuota = 800000
-		baseConfig.MemoryLimit = 4294967296
-		baseConfig.PidsLimit = 1024
+		baseConfig.MemoryLimit = 4294967296 // 4GB
+		baseConfig.PidsLimit = 4096         // INCREASED from 1024
 		baseConfig.StorageLimit = 100 * units.GiB
 		baseConfig.AllowedPorts = []int{8080, 8443, 9090, 3000}
 
@@ -111,13 +112,12 @@ func GetDefaultDeploymentConfig(planTier string, environment string) DeploymentS
 		return GetDefaultDeploymentConfig("starter", environment)
 	}
 
-	// Production environments get stricter security
+	// Production environments can be stricter, but still compatible with Node.js
 	if environment == "production" {
-		baseConfig.ReadOnlyRoot = true
+		baseConfig.ReadOnlyRoot = false // CHANGED: Node.js needs write access
 		baseConfig.StartupTimeout = 180 * time.Second
 	} else {
 		baseConfig.StartupTimeout = 60 * time.Second
-		// Development can be less restrictive
 		baseConfig.ReadOnlyRoot = false
 	}
 

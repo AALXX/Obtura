@@ -63,7 +63,7 @@ CREATE TABLE
         log_type VARCHAR(50) NOT NULL,
         message TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW ()
-
+    );
 CREATE TABLE build_usage (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,

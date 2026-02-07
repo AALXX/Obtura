@@ -35,6 +35,9 @@ func main() {
 	defer db.Close()
 	log.Println("✅ Successfully connected to PostgreSQL database")
 
+	// Initialize deployment broker with database support
+	deployment_logger.InitDeploymentBroker(db.DB)
+
 	redisURL := pkg.GetEnv("REDIS_URL", "redis://localhost:6379/0")
 	rateLimiter, err := security.NewRateLimiter(redisURL)
 	if err != nil {
@@ -91,19 +94,19 @@ func main() {
 		})
 	})
 
+	// SSE endpoint for live deployment logs
 	r.GET("/api/deployments/:deploymentId/logs/stream", deployment_logger.HandleDeploymentLogsSSE)
 
-	// Historical deployment logs endpoint
+	// REST endpoint for historical deployment logs (from deployment_events table)
 	r.GET("/api/deployments/:deploymentId/logs", func(c *gin.Context) {
 		deploymentID := c.Param("deploymentId")
 
-		// Fetch deployment events
 		rows, err := db.Query(`
-        SELECT event_type, event_message, severity, created_at 
-        FROM deployment_events 
-        WHERE deployment_id = $1 
-        ORDER BY created_at ASC
-    `, deploymentID)
+			SELECT event_type, event_message, severity, created_at 
+			FROM deployment_events 
+			WHERE deployment_id = $1 
+			ORDER BY created_at ASC
+		`, deploymentID)
 		if err != nil {
 			c.JSON(500, gin.H{"error": "Failed to fetch deployment logs"})
 			return
@@ -116,10 +119,10 @@ func main() {
 			var createdAt interface{}
 			rows.Scan(&eventType, &message, &severity, &createdAt)
 			logs = append(logs, gin.H{
-				"type":      severity,
-				"message":   message,
-				"eventType": eventType,
-				"timestamp": createdAt,
+				"log_type":   severity,        // Maps to type in frontend
+				"message":    message,
+				"event_type": eventType,
+				"created_at": createdAt,
 			})
 		}
 
@@ -139,7 +142,7 @@ func main() {
 		}
 	}()
 
-	serverPort := pkg.GetEnv("PORT", "5050")
+	serverPort := pkg.GetEnv("PORT", "5070")
 
 	go func() {
 		sigChan := make(chan os.Signal, 1)
@@ -153,7 +156,8 @@ func main() {
 	}()
 
 	log.Printf("🌐 Starting server on port %s...", serverPort)
-	log.Printf("📡 SSE endpoint available at: http://localhost:%s/api/builds/{buildId}/logs/stream", serverPort)
+	log.Printf("📡 SSE endpoint: http://localhost:%s/api/deployments/{deploymentId}/logs/stream", serverPort)
+	log.Printf("📊 REST endpoint: http://localhost:%s/api/deployments/{deploymentId}/logs", serverPort)
 	if err := r.Run(":" + serverPort); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

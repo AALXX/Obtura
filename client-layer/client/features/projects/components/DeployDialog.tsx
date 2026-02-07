@@ -7,7 +7,7 @@ interface DeployDialogProps {
     projectId: string
     builds: Array<{
         id: string
-        commit: string
+        commitHash: string
         branch: string
         status: string
         buildTime: string | null
@@ -136,7 +136,7 @@ const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, bui
                                 ) : (
                                     successfulBuilds.map(build => (
                                         <option key={build.id} value={build.id}>
-                                            #{build.id.substring(0, 8)} - {build.branch} ({build.commit.substring(0, 7)}) - {build.createdAt}
+                                            #{build.id.substring(0, 8)} - {build.branch} ({build.commitHash.substring(0, 7)}) - {build.createdAt}
                                         </option>
                                     ))
                                 )}
@@ -154,7 +154,7 @@ const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, bui
                                         </div>
                                         <div>
                                             <div className="text-zinc-400">Commit</div>
-                                            <div className="font-mono text-xs font-medium">{successfulBuilds.find(b => b.id === selectedBuild)?.commit.substring(0, 7)}</div>
+                                            <div className="font-mono text-xs font-medium">{successfulBuilds.find(b => b.id === selectedBuild)?.commitHash.substring(0, 7)}</div>
                                         </div>
                                     </div>
                                 </div>

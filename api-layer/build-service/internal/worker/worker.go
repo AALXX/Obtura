@@ -571,9 +571,15 @@ LIMIT 1;
 	}
 	w.streamStatus(job.BuildID, "building", "Building Docker images")
 
+	minMemory := quotaLimits.MemoryGB
+	if minMemory < 2 {
+		minMemory = 2
+		w.streamLog(job.BuildID, "⚠️ Increasing memory to 2GB minimum for build compatibility")
+	}
+
 	sandboxConfig := security.SandboxConfig{
 		CPUQuota:     int64(quotaLimits.CPUCores) * 100000,
-		MemoryLimit:  int64(quotaLimits.MemoryGB) * 1024 * 1024 * 1024,
+		MemoryLimit:  int64(minMemory) * 1024 * 1024 * 1024,
 		PidsLimit:    512,
 		NoNewPrivs:   true,
 		ReadOnlyRoot: false,
@@ -716,31 +722,54 @@ LIMIT 1;
 	w.streamLog(job.BuildID, fmt.Sprintf("✅ Build completed successfully with %d service(s) in %dm %ds",
 		len(result.Frameworks), buildTimeSeconds/60, buildTimeSeconds%60))
 
-	// In Build Service worker.go
 
-	// After successful build completion
 	if job.Deploy != nil && *job.Deploy {
 		fmt.Println("Deploy is enabled")
 
-		// Prepare deployment message with full data
+		// Fetch deployment details from database
+		var environment, strategy, domain string
+		var subdomain sql.NullString 
+
+		deployQuery := `
+        SELECT environment, deployment_strategy, domain, subdomain
+        FROM deployments
+        WHERE id = $1
+    `
+		err := w.db.QueryRowContext(ctx, deployQuery, job.DeploymentID).Scan(
+			&environment, &strategy, &domain, &subdomain,
+		)
+		if err != nil {
+			log.Printf("❌ Failed to fetch deployment details: %v", err)
+			return
+		}
+
+		subdomainValue := ""
+		if subdomain.Valid {
+			subdomainValue = subdomain.String
+		}
+
 		deployMsg := map[string]interface{}{
 			"buildId":      job.BuildID,
 			"deploymentId": job.DeploymentID,
 			"projectId":    job.ProjectID,
-			"project": map[string]string{
-				"id": job.ProjectID,
-				// Add more project data if available
+			"project": map[string]interface{}{
+				"id":   job.ProjectID,
+				"slug": "",
+				"name": "",
 			},
 			"build": map[string]interface{}{
 				"id":         job.BuildID,
 				"imageTags":  imageTags,
 				"branch":     job.Branch,
-				"commitHash": job.CommitHash, // You'll need to pass this
-				"metadata":   result,     // Framework detection results
+				"commitHash": job.CommitHash,
+				"metadata":   result,
 			},
 			"deployment": map[string]interface{}{
 				"id":          job.DeploymentID,
-				"environment": "production", // or from job
+				"environment": environment,
+				"strategy":    strategy,
+				"domain":      domain,
+				"subdomain":   subdomainValue, // Use the extracted value
 			},
 		}
 
@@ -752,10 +781,10 @@ LIMIT 1;
 
 		// Publish to exchange with proper routing key
 		err = w.channel.Publish(
-			"obtura.deploys",   // Exchange name
-			"deploy.triggered", // Routing key
-			false,              // mandatory
-			false,              // immediate
+			"obtura.deploys",
+			"deploy.triggered",
+			false,
+			false,
 			amqp.Publishing{
 				ContentType: "application/json",
 				Body:        msgBody,

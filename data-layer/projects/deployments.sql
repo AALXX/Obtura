@@ -38,7 +38,7 @@ CREATE TABLE deployments (
     secret_refs JSONB DEFAULT '[]', -- References to secrets stored securely
     
     -- retries
-    retry_count INTEGER DEFAULT 0
+    retry_count INTEGER DEFAULT 
     last_retry_at TIMESTAMP
     retry_errors JSONB DEFAULT '[]',
 
@@ -56,6 +56,7 @@ CREATE TABLE deployments (
     approval_required BOOLEAN DEFAULT false,
     approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     approved_at TIMESTAMP,
+    detected_dependencies JSONB DEFAULT '{}'
     
     -- Rollback information
     is_rollback BOOLEAN DEFAULT false,
@@ -116,6 +117,25 @@ CREATE UNIQUE INDEX ux_deployments_active_preview
 ON deployments (project_id, environment, branch)
 WHERE status = 'active' AND environment = 'preview';
 
+CREATE TABLE IF NOT EXISTS deployment_logs (
+    id SERIAL PRIMARY KEY,
+    deployment_id UUID NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+    log_type VARCHAR(50) NOT NULL,  -- 'info', 'success', 'error', 'warning'
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    
+    -- Indexes for performance
+    INDEX idx_deployment_logs_deployment_id (deployment_id),
+    INDEX idx_deployment_logs_created_at (created_at),
+    INDEX idx_deployment_logs_log_type (log_type)
+);
+
+-- Add comment
+COMMENT ON TABLE deployment_logs IS 'Stores all deployment logs for historical viewing and debugging';
+COMMENT ON COLUMN deployment_logs.deployment_id IS 'Foreign key to deployments table';
+COMMENT ON COLUMN deployment_logs.log_type IS 'Type of log: info, success, error, warning';
+COMMENT ON COLUMN deployment_logs.message IS 'Log message content';
+COMMENT ON COLUMN deployment_logs.created_at IS 'Timestamp when log was created';
 
 -- Indexes for performance
 CREATE INDEX idx_deployments_project_id ON deployments(project_id);

@@ -59,7 +59,6 @@ const NavBar = () => {
 
     const navItems = [
         { href: '/projects', label: 'Projects', icon: FolderCodeIcon },
-        { href: '/deployments', label: 'Deployments', icon: Rocket },
         { href: '/employees', label: 'Employees', icon: Users },
         { href: '/team', label: 'Team', icon: Users }
     ]

@@ -202,7 +202,7 @@ const GetProjects = async (req: Request, res: Response) => {
     try {
         const { accessToken } = req.params;
 
-        const userId = await getUserIdFromSessionToken(accessToken);
+        const userId = await getUserIdFromSessionToken(accessToken!);
 
         console.log(userId);
 
@@ -872,7 +872,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
         commit_hash, 
         commit_message, 
         commit_author,
-        deployment_strategy,  // <- Add this
+        deployment_strategy, 
         domain,
         subdomain,
         deployed_by_user_id,
@@ -954,6 +954,7 @@ const TriggerDeploy = async (req: Request, res: Response) => {
             return res.status(200).json({
                 buildId: newBuildId,
                 deploymentId: deploymentId,
+
                 commitHash: commitHash,
                 branch: branch,
                 environment: environment,
@@ -1133,6 +1134,54 @@ recent_builds AS (
     ORDER BY b.created_at DESC
     LIMIT 20
 ),
+deployment_history AS (
+    SELECT 
+        d.id,
+        d.environment,
+        d.status,
+        d.deployment_strategy,
+        d.branch,
+        d.commit_hash,
+        d.deployment_trigger,
+        d.deployment_started_at,
+        d.deployment_completed_at,
+        d.error_message,
+        d.replica_count,
+        d.traffic_percentage,
+        COALESCE(d.domain, CONCAT(d.subdomain, '.yourapp.com')) as deployment_url,
+        u.name as deployed_by_name,
+        u.email as deployed_by_email,
+        b.build_time_seconds,
+        CASE 
+            WHEN b.metadata->>'frameworks' IS NOT NULL THEN
+                (b.metadata->'frameworks'->0->>'Name')
+            ELSE NULL
+        END as framework,
+        EXTRACT(EPOCH FROM (NOW() - d.created_at)) as seconds_ago,
+        -- Calculate deployment duration
+        CASE 
+            WHEN d.deployment_completed_at IS NOT NULL AND d.deployment_started_at IS NOT NULL
+            THEN EXTRACT(EPOCH FROM (d.deployment_completed_at - d.deployment_started_at))::INTEGER
+            ELSE NULL
+        END as deployment_duration_seconds,
+        -- Get strategy phase info
+        dss.current_phase as strategy_phase,
+        -- Count traffic switches (phase transitions to 'switching_traffic')
+        (
+            SELECT COUNT(*) 
+            FROM deployment_phase_transitions dpt 
+            WHERE dpt.deployment_id = d.id 
+            AND dpt.to_phase = 'switching_traffic'
+        ) as traffic_switch_count
+    FROM deployments d
+    LEFT JOIN users u ON u.id = d.deployed_by_user_id
+    LEFT JOIN builds b ON b.id = d.build_id
+    LEFT JOIN deployment_strategy_state dss ON dss.deployment_id = d.id
+    WHERE d.project_id = $1
+        AND d.status IN ('active', 'failed', 'rolled_back', 'terminated')
+    ORDER BY d.created_at DESC
+    LIMIT 30
+),
 latest_metrics AS (
     SELECT 
         uptime_percentage,
@@ -1193,7 +1242,7 @@ SELECT
                 WHEN prod.seconds_ago < 86400 THEN CONCAT(FLOOR(prod.seconds_ago / 3600), ' hours ago')
                 ELSE CONCAT(FLOOR(prod.seconds_ago / 86400), ' days ago')
             END,
-            'commit', prod.commit_hash,
+            'commitHash', prod.commit_hash,
             'branch', prod.branch,
             'buildTime', CASE 
                 WHEN prod.build_time_seconds IS NOT NULL 
@@ -1237,7 +1286,7 @@ SELECT
                 WHEN stg.seconds_ago < 86400 THEN CONCAT(FLOOR(stg.seconds_ago / 3600), ' hours ago')
                 ELSE CONCAT(FLOOR(stg.seconds_ago / 86400), ' days ago')
             END,
-            'commit', stg.commit_hash,
+            'commitHash', stg.commit_hash,
             'branch', stg.branch,
             'buildTime', CASE 
                 WHEN stg.build_time_seconds IS NOT NULL 
@@ -1267,7 +1316,7 @@ SELECT
                 json_build_object(
                     'url', pd.deployment_url,
                     'branch', pd.branch,
-                    'commit', pd.commit_hash,
+                    'commitHash', pd.commit_hash,
                     'status', pd.status,
                     'replicaCount', pd.replica_count,
                     'expiresAt', pd.preview_expires_at,
@@ -1289,7 +1338,7 @@ SELECT
             SELECT json_agg(
                 json_build_object(
                     'id', rb.id,
-                    'commit', rb.commit_hash,
+                    'commitHash', rb.commit_hash,
                     'branch', rb.branch,
                     'status', rb.status,
                     'buildTime', CASE 
@@ -1315,6 +1364,54 @@ SELECT
         ),
         '[]'::json
     ) as builds,
+    
+    -- Deployment History (NEW)
+    COALESCE(
+        (
+            SELECT json_agg(
+                json_build_object(
+                    'id', dh.id,
+                    'environment', dh.environment,
+                    'status', dh.status,
+                    'deploymentStrategy', dh.deployment_strategy,
+                    'branch', dh.branch,
+                    'commitHash', dh.commit_hash,
+                    'deploymentUrl', dh.deployment_url,
+                    'deploymentTrigger', dh.deployment_trigger,
+                    'trafficPercentage', dh.traffic_percentage,
+                    'replicaCount', dh.replica_count,
+                    'framework', dh.framework,
+                    'deployedBy', CASE 
+                        WHEN dh.deployed_by_name IS NOT NULL 
+                        THEN dh.deployed_by_name
+                        ELSE dh.deployed_by_email
+                    END,
+                    'startedAt', CASE 
+                        WHEN dh.seconds_ago < 3600 THEN CONCAT(FLOOR(dh.seconds_ago / 60), ' minutes ago')
+                        WHEN dh.seconds_ago < 86400 THEN CONCAT(FLOOR(dh.seconds_ago / 3600), ' hours ago')
+                        ELSE CONCAT(FLOOR(dh.seconds_ago / 86400), ' days ago')
+                    END,
+                    'completedAt', dh.deployment_completed_at,
+                    'duration', CASE 
+                        WHEN dh.deployment_duration_seconds IS NOT NULL 
+                        THEN CONCAT(FLOOR(dh.deployment_duration_seconds / 60), 'm ', dh.deployment_duration_seconds % 60, 's')
+                        ELSE NULL
+                    END,
+                    'buildTime', CASE 
+                        WHEN dh.build_time_seconds IS NOT NULL 
+                        THEN CONCAT(FLOOR(dh.build_time_seconds / 60), 'm ', dh.build_time_seconds % 60, 's')
+                        ELSE NULL
+                    END,
+                    'strategyPhase', dh.strategy_phase,
+                    'trafficSwitchCount', dh.traffic_switch_count,
+                    'errorMessage', dh.error_message
+                )
+                ORDER BY dh.deployment_started_at DESC
+            )
+            FROM deployment_history dh
+        ),
+        '[]'::json
+    ) as deployments,
     
     -- Metrics
     json_build_object(
@@ -1365,6 +1462,7 @@ WHERE p.id = $1
                 production: project.production,
                 gitRepoUrl: project.git_repo_url,
                 builds: project.builds || [],
+                deployments: project.deployments || [], // NEW: Deployment history
                 staging: project.staging,
                 preview: project.preview || [],
                 metrics: project.metrics,

@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"deploy-service/internal/detection"
+	deployment_logger "deploy-service/internal/logger"
 	"deploy-service/internal/security"
 
 	"github.com/docker/docker/api/types/container"
@@ -42,6 +44,7 @@ type DeploymentOrchestrator struct {
 	quotaService *security.QuotaService
 	rateLimiter  *security.RateLimiter
 	dockerClient *client.Client
+	broker       *deployment_logger.DeploymentBroker
 }
 
 type DeploymentJob struct {
@@ -102,6 +105,7 @@ func NewDeploymentOrchestrator(db *sql.DB, quotaService *security.QuotaService, 
 		quotaService: quotaService,
 		rateLimiter:  rateLimiter,
 		dockerClient: dockerClient,
+		broker:       deployment_logger.GetDeploymentBroker(),
 	}, nil
 }
 
@@ -116,7 +120,9 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 	log.Printf("🚀 Starting deployment %s for project %s using %s strategy",
 		job.DeploymentID, job.ProjectID, job.Strategy)
 
-	// Set defaults
+	o.broker.PublishLog(job.DeploymentID, "info",
+		fmt.Sprintf("Starting %s deployment for project %s", job.Strategy, job.ProjectID))
+
 	if job.Strategy == "" {
 		job.Strategy = "blue_green"
 	}
@@ -129,6 +135,8 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 		return o.handleFailure(job, "get_company_id", err)
 	}
 
+	o.broker.PublishLog(job.DeploymentID, "info", "Checking deployment quotas...")
+
 	if err := o.checkDeploymentQuotaWithCompany(ctx, job, companyID); err != nil {
 		return o.handleFailure(job, "quota_check", err)
 	}
@@ -138,20 +146,29 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 		log.Printf("[deploy] decremented concurrent deployments for company %s", companyID)
 	}()
 
+	o.broker.PublishLog(job.DeploymentID, "success", "Quota check passed")
+
 	if err := o.validateDeployment(ctx, job); err != nil {
 		return o.handleFailure(job, "validation", err)
 	}
+
+	o.broker.PublishLog(job.DeploymentID, "success", "Deployment validated")
 
 	if err := o.initializeStrategyState(ctx, job); err != nil {
 		return o.handleFailure(job, "strategy_initialization", err)
 	}
 
+	o.broker.PublishLog(job.DeploymentID, "info",
+		fmt.Sprintf("Initialized %s deployment strategy", job.Strategy))
+
 	dependencies, err := o.detectDependencies(ctx, job)
 	if err != nil {
 		return o.handleFailure(job, "dependency_detection", err)
 	}
-	log.Printf("[deploy] detected dependencies: services=%d, databases=%d",
-		len(dependencies.Services), len(dependencies.Databases))
+
+	o.broker.PublishLog(job.DeploymentID, "info",
+		fmt.Sprintf("Detected dependencies: %d services, %d databases",
+			len(dependencies.Services), len(dependencies.Databases)))
 
 	var deployErr error
 	switch job.Strategy {
@@ -168,6 +185,10 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 	if deployErr != nil {
 		return deployErr
 	}
+
+	o.broker.PublishComplete(job.DeploymentID, "active",
+		"Deployment completed successfully",
+		formatDuration(time.Since(time.Now())), "")
 
 	log.Printf("✅ Deployment %s completed successfully", job.DeploymentID)
 	return nil
@@ -216,6 +237,9 @@ func (o *DeploymentOrchestrator) checkDeploymentQuotaWithCompany(ctx context.Con
 func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job DeploymentJob) error {
 	log.Printf("[blue-green] starting deployment for %s", job.DeploymentID)
 
+	o.broker.PublishPhase(job.DeploymentID, "preparing",
+		"Preparing blue-green deployment", nil)
+
 	activeGroup, err := o.getActiveGroup(ctx, job.DeploymentID)
 	if err != nil && err != sql.ErrNoRows {
 		return o.handleFailure(job, "get_active_group", err)
@@ -249,29 +273,53 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 
 	log.Printf("[blue-green] active group: %s, deploying to: %s", activeGroup, newGroup)
 
-	o.updateStrategyPhase(ctx, job.DeploymentID, "deploying_new", map[string]interface{}{
+	metadata := map[string]interface{}{
 		"active_group":  activeGroup,
 		"standby_group": newGroup,
-	})
+	}
+
+	o.broker.PublishPhase(job.DeploymentID, "deploying_new",
+		fmt.Sprintf("Deploying to %s group", newGroup), metadata)
+	o.updateStrategyPhase(ctx, job.DeploymentID, "deploying_new", metadata)
 
 	newContainers := make([]*ContainerInfo, 0, job.ReplicaCount)
 	for i := 0; i < job.ReplicaCount; i++ {
+		o.broker.PublishLog(job.DeploymentID, "info",
+			fmt.Sprintf("Creating container %d/%d in %s group", i+1, job.ReplicaCount, newGroup))
+
 		container, err := o.deployContainer(ctx, job, newGroup, i, false)
 		if err != nil {
 			o.cleanupContainersWithDocker(ctx, newContainers)
 			return o.handleFailure(job, "container_creation", err)
 		}
 		newContainers = append(newContainers, container)
+
+		o.broker.PublishContainerEvent(job.DeploymentID,
+			container.ID, container.Name, container.Status,
+			container.Health, newGroup,
+			fmt.Sprintf("Container %s created", container.Name))
 	}
 
+	o.broker.PublishPhase(job.DeploymentID, "health_checking",
+		"Performing health checks on new containers", nil)
 	o.updateStrategyPhase(ctx, job.DeploymentID, "health_checking", nil)
 
 	allHealthy := true
-	for _, container := range newContainers {
+	for i, container := range newContainers {
+		o.broker.PublishLog(job.DeploymentID, "info",
+			fmt.Sprintf("Health checking container %d/%d: %s", i+1, len(newContainers), container.Name))
+
 		if !o.waitForDockerHealthCheck(ctx, container.ID, healthCheckTimeout) {
 			allHealthy = false
+			o.broker.PublishLog(job.DeploymentID, "error",
+				fmt.Sprintf("Health check failed for container %s", container.Name))
 			break
 		}
+
+		o.broker.PublishContainerEvent(job.DeploymentID,
+			container.ID, container.Name, "running",
+			"healthy", newGroup,
+			fmt.Sprintf("Container %s is healthy", container.Name))
 	}
 
 	if !allHealthy {
@@ -279,6 +327,11 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 		return o.handleFailure(job, "health_check", errors.New("health check timeout"))
 	}
 
+	o.broker.PublishLog(job.DeploymentID, "success",
+		"All containers passed health checks")
+
+	o.broker.PublishPhase(job.DeploymentID, "switching_traffic",
+		fmt.Sprintf("Switching traffic from %s to %s", activeGroup, newGroup), nil)
 	o.updateStrategyPhase(ctx, job.DeploymentID, "switching_traffic", nil)
 
 	if err := o.switchTrafficBlueGreen(ctx, job, activeGroup, newGroup, newContainers); err != nil {
@@ -286,19 +339,38 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 		return o.handleFailure(job, "traffic_switch", err)
 	}
 
+	containerIDs := make([]string, len(newContainers))
+	for i, c := range newContainers {
+		containerIDs[i] = c.ID
+	}
+
+	o.broker.PublishTrafficRouting(job.DeploymentID, newGroup, 100, containerIDs,
+		fmt.Sprintf("100%% traffic routed to %s group", newGroup))
+
 	if activeGroup != "" {
+		o.broker.PublishPhase(job.DeploymentID, "draining_old",
+			fmt.Sprintf("Draining old containers in %s group", activeGroup), nil)
 		o.updateStrategyPhase(ctx, job.DeploymentID, "draining_old", nil)
+
 		time.Sleep(gracePeriod)
 
-		// Get old containers by project/environment/group instead of just deployment ID
 		oldContainers, err := o.getContainersByProjectAndGroup(ctx, job.ProjectID, job.Environment, activeGroup)
 		if err != nil {
 			log.Printf("[warn] failed to get old containers for cleanup: %v", err)
 		} else {
+			o.broker.PublishLog(job.DeploymentID, "info",
+				fmt.Sprintf("Removing %d old containers", len(oldContainers)))
 			o.cleanupContainersWithDocker(ctx, oldContainers)
 		}
 	}
 
+	if err := o.deactivateOldDeployments(ctx, job, job.DeploymentID); err != nil {
+		log.Printf("[warn] failed to deactivate old deployments: %v", err)
+		// Don't fail the deployment, just log the warning
+	}
+
+	o.broker.PublishPhase(job.DeploymentID, "completed",
+		"Deployment completed successfully", nil)
 	o.updateStrategyPhase(ctx, job.DeploymentID, "completed", nil)
 	o.updateDeploymentStatus(job.DeploymentID, DeploymentStatusActive)
 
@@ -412,6 +484,10 @@ func (o *DeploymentOrchestrator) RollingUpdate(ctx context.Context, job Deployme
 		log.Printf("[rolling] batch %d/%d completed", batch+1, totalBatches)
 	}
 
+	if err := o.deactivateOldDeployments(ctx, job, job.DeploymentID); err != nil {
+		log.Printf("[warn] failed to deactivate old deployments: %v", err)
+	}
+
 	o.updateStrategyPhase(ctx, job.DeploymentID, "completed", nil)
 	o.updateDeploymentStatus(job.DeploymentID, DeploymentStatusActive)
 
@@ -465,11 +541,14 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 		}
 	}
 
-	log.Printf("[canary] analysis passed, promoting to full deployment")
-	o.updateStrategyPhase(ctx, job.DeploymentID, "completed", nil)
+	if err := o.deactivateOldDeployments(ctx, job, job.DeploymentID); err != nil {
+		log.Printf("[warn] failed to deactivate old deployments: %v", err)
+	}
 
 	o.routeTrafficToCanary(ctx, job, canaryContainer.ID, 100)
 	o.updateContainerGroup(ctx, canaryContainer.ID, "stable", true)
+	log.Printf("[canary] analysis passed, promoting to full deployment")
+	o.updateStrategyPhase(ctx, job.DeploymentID, "completed", nil)	
 	o.updateDeploymentStatus(job.DeploymentID, DeploymentStatusActive)
 
 	log.Printf("✅ Canary deployment completed for %s", job.DeploymentID)
@@ -576,6 +655,11 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 	deadline := time.Now().Add(timeout)
 	log.Printf("[health] waiting for container %s...", containerID[:12])
 
+	// Wait at least 35 seconds before checking (allow StartPeriod to pass)
+	initialWait := 35 * time.Second
+	log.Printf("[health] waiting %v for container to start...", initialWait)
+	time.Sleep(initialWait)
+
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -586,6 +670,19 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 				log.Printf("[warn] failed to inspect container %s: %v", containerID[:12], err)
 				time.Sleep(healthCheckInterval)
 				continue
+			}
+
+			// Check if container is even running first
+			if !inspect.State.Running {
+				log.Printf("[health] container %s is not running (status: %s, exit code: %d)",
+					containerID[:12], inspect.State.Status, inspect.State.ExitCode)
+
+				// If container exited, get the logs to see why
+				logs, _ := o.getContainerLogs(ctx, containerID)
+				if logs != "" {
+					log.Printf("[health] container %s logs:\n%s", containerID[:12], logs)
+				}
+				return false
 			}
 
 			if inspect.State.Health != nil {
@@ -599,11 +696,27 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 					return true
 				}
 
-				if healthStatus == "unhealthy" {
-					log.Printf("[health] container %s is unhealthy", containerID[:12])
-					return false
+				// Parse StartedAt time
+				startedAt, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
+				if err != nil {
+					log.Printf("[warn] failed to parse StartedAt time: %v", err)
+					// Continue checking anyway
+				} else {
+					// Only fail if explicitly unhealthy AFTER grace period
+					if healthStatus == "unhealthy" {
+						timeSinceStart := time.Since(startedAt)
+						if timeSinceStart > 35*time.Second {
+							log.Printf("[health] container %s is unhealthy after %v",
+								containerID[:12], timeSinceStart)
+							return false
+						} else {
+							log.Printf("[health] container %s unhealthy but still in grace period (%v elapsed)",
+								containerID[:12], timeSinceStart)
+						}
+					}
 				}
 			} else {
+				// No healthcheck configured, just verify it's running
 				if inspect.State.Running {
 					log.Printf("[health] container %s is running (no healthcheck configured)", containerID[:12])
 					return true
@@ -614,8 +727,31 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 		}
 	}
 
-	log.Printf("[health] timeout for container %s", containerID[:12])
+	log.Printf("[health] timeout for container %s after %v", containerID[:12], timeout)
 	return false
+}
+
+// Helper function to get container logs
+func (o *DeploymentOrchestrator) getContainerLogs(ctx context.Context, containerID string) (string, error) {
+	options := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "100",
+	}
+
+	logs, err := o.dockerClient.ContainerLogs(ctx, containerID, options)
+	if err != nil {
+		return "", err
+	}
+	defer logs.Close()
+
+	buf := new(strings.Builder)
+	_, err = io.Copy(buf, logs)
+	if err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
 }
 
 func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
@@ -632,6 +768,15 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 	healthCheckPath := config.HealthCheckURL
 	if healthCheckPath == "" {
 		healthCheckPath = "/health"
+	}
+
+	// SAFETY CHECK: Ensure minimum PidsLimit for Node.js applications
+	minPidsLimit := int64(512)
+	adjustedPidsLimit := config.PidsLimit
+	if adjustedPidsLimit < minPidsLimit {
+		log.Printf("[warn] PidsLimit %d is too low for Node.js, increasing to %d",
+			adjustedPidsLimit, minPidsLimit)
+		adjustedPidsLimit = minPidsLimit
 	}
 
 	containerConfig := &container.Config{
@@ -662,7 +807,7 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 			Interval:    10 * time.Second,
 			Timeout:     5 * time.Second,
 			Retries:     3,
-			StartPeriod: 30 * time.Second,
+			StartPeriod: 40 * time.Second,
 		},
 		WorkingDir: "/app",
 	}
@@ -673,11 +818,11 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 			CPUPeriod:   100000,
 			Memory:      config.MemoryLimit,
 			MemorySwap:  config.MemoryLimit,
-			PidsLimit:   &config.PidsLimit,
+			PidsLimit:   &adjustedPidsLimit, // Use adjusted limit
 			BlkioWeight: 500,
 			Ulimits: []*units.Ulimit{
 				{Name: "nofile", Soft: 1024, Hard: 2048},
-				{Name: "nproc", Soft: int64(config.PidsLimit), Hard: int64(config.PidsLimit)},
+				{Name: "nproc", Soft: int64(adjustedPidsLimit), Hard: int64(adjustedPidsLimit)},
 				{Name: "core", Soft: 0, Hard: 0},
 			},
 		},
@@ -708,10 +853,10 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 		MaskedPaths:   config.MaskedPaths,
 		ReadonlyPaths: config.ReadOnlyPaths,
 		Tmpfs: map[string]string{
-			"/tmp":       "rw,noexec,nosuid,size=100m",
-			"/var/tmp":   "rw,noexec,nosuid,size=100m",
-			"/var/run":   "rw,noexec,nosuid,size=50m",
-			"/var/cache": "rw,noexec,nosuid,size=200m",
+			"/tmp":       "rw,noexec,nosuid,size=200m", // INCREASED from 100m
+			"/var/tmp":   "rw,noexec,nosuid,size=200m", // INCREASED from 100m
+			"/var/run":   "rw,noexec,nosuid,size=100m", // INCREASED from 50m
+			"/var/cache": "rw,noexec,nosuid,size=500m", // INCREASED from 200m
 		},
 		Mounts: o.buildSecureMounts(job, config),
 		LogConfig: container.LogConfig{
@@ -1113,7 +1258,13 @@ func (o *DeploymentOrchestrator) analyzeCanaryMetrics(ctx context.Context, deplo
 func (o *DeploymentOrchestrator) updateDeploymentStatus(deploymentID, status string) error {
 	query := `
         UPDATE deployments
-        SET status = $2, updated_at = NOW()
+        SET status = $2, 
+            traffic_percentage = CASE 
+                WHEN $2 = 'active' THEN 100 
+                WHEN $2 = 'terminated' THEN 0
+                ELSE traffic_percentage 
+            END,
+            updated_at = NOW()
         WHERE id = $1
     `
 	result, err := o.db.Exec(query, deploymentID, status)
@@ -1207,34 +1358,6 @@ func (o *DeploymentOrchestrator) storeDetectedDependencies(ctx context.Context, 
     `
 
 	_, err = o.db.ExecContext(ctx, query, string(depsJSON), deploymentID)
-	return err
-}
-
-func (o *DeploymentOrchestrator) handleFailure(job DeploymentJob, phase string, err error) error {
-	log.Printf("❌ Deployment %s failed in phase %s: %v", job.DeploymentID, phase, err)
-
-	o.db.Exec(`
-        UPDATE deployment_strategy_state
-        SET current_phase = 'failed',
-            error_message = $2,
-            failed_at = NOW()
-        WHERE deployment_id = $1
-    `, job.DeploymentID, err.Error())
-
-	o.db.Exec(`
-        UPDATE deployments 
-        SET status = $2,
-            error_message = $3,
-            updated_at = NOW()
-        WHERE id = $1
-    `, job.DeploymentID, DeploymentStatusFailed, err.Error())
-
-	o.db.Exec(`
-        INSERT INTO deployment_events
-        (deployment_id, event_type, event_message, severity)
-        VALUES ($1, 'failed', $2, 'critical')
-    `, job.DeploymentID, fmt.Sprintf("Failed in %s: %v", phase, err))
-
 	return err
 }
 
@@ -1339,4 +1462,3 @@ func (o *DeploymentOrchestrator) Rollback(ctx context.Context, deploymentID, tar
 	log.Printf("✅ Rollback completed for deployment %s", deploymentID)
 	return nil
 }
-

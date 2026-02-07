@@ -17,18 +17,41 @@ export interface ProjectData {
     preview: PreviewDeployment[]
     metrics: ProjectMetrics
     gitRepoUrl: string
-    builds: BuildData[] // Add this
+    builds: BuildData[]
+    deployments: Deployment[] 
 }
 
 export interface BuildData {
     id: string
-    commit: string
+    commitHash: string
     branch: string
     status: 'queued' | 'cloning' | 'installing' | 'building' | 'deploying' | 'completed' | 'failed' | 'cancelled' | 'timeout'
     buildTime: string | null
     framework: string | null
     initiatedBy: string | null
     createdAt: string
+    errorMessage: string | null
+}
+
+export interface Deployment {
+    id: string
+    environment: 'production' | 'staging' | 'preview'
+    status: DeploymentStatus
+    deploymentStrategy: 'blue_green' | 'rolling' | 'canary' | 'recreate'
+    branch: string
+    commitHash: string
+    deploymentUrl: string
+    deploymentTrigger: 'manual' | 'auto_push' | 'auto_merge' | 'scheduled' | 'rollback'
+    trafficPercentage: number
+    replicaCount: number
+    framework: string | null
+    deployedBy: string | null
+    startedAt: string
+    completedAt: string | null
+    duration: string | null
+    buildTime: string | null
+    strategyPhase: string | null
+    trafficSwitchCount: number
     errorMessage: string | null
 }
 
@@ -90,7 +113,7 @@ export interface EnvironmentDeployment {
     monitoringEnabled: boolean | null
     deploymentTrigger: string | null
     lastDeployment: string
-    commit: string | null
+    commitHash: string | null
     branch: string | null
     buildTime: string | null
     framework: string | null
@@ -107,7 +130,7 @@ export interface PreviewDeployment {
     url?: string
     status?: string
     createdAt?: string
-    commit?: string
+    commitHash?: string
     branch?: string
 }
 
@@ -127,13 +150,13 @@ export interface ProjectResponse {
     memberCount: number
 }
 
-export type BuildStatus = 'queued' | 'cloning' | 'installing' | 'building' | 'running'| 'deploying' | 'success' | 'failed' | 'cancelled'
+export type BuildStatus = 'queued' | 'cloning' | 'installing' | 'building' | 'running' | 'deploying' | 'success' | 'failed' | 'cancelled'
 
 export interface Build {
     id: string
     status: BuildStatus
     branch: string
-    commit: string
+    commitHash: string
     startTime: string
     endTime?: string
     duration?: string
@@ -143,15 +166,18 @@ export interface Build {
     errorMessage?: string
 }
 
-
-
 export interface DeploymentConfig {
     environment: 'production' | 'staging'
     source: 'build' | 'branch'
     buildId?: string
     branch?: string
-    commit?: string
+    commitHash?: string
     strategy?: string
     enableMonitoring?: boolean
     autoScaling?: boolean
 }
+
+// Additional helper types for deployment status
+export type DeploymentStatus = 'pending' | 'deploying' | 'active' | 'failed' | 'rolled_back' | 'terminated'
+export type DeploymentTrigger = 'manual' | 'auto_push' | 'auto_merge' | 'scheduled' | 'rollback'
+export type DeploymentStrategy = 'blue_green' | 'rolling' | 'canary' | 'recreate'

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -284,4 +285,117 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func formatDuration(d time.Duration) string {
+	minutes := int(d.Minutes())
+	seconds := int(d.Seconds()) % 60
+	if minutes > 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+func (o *DeploymentOrchestrator) handleFailure(job DeploymentJob, phase string, err error) error {
+	log.Printf("❌ Deployment %s failed in phase %s: %v", job.DeploymentID, phase, err)
+
+	o.broker.PublishLog(job.DeploymentID, "error",
+		fmt.Sprintf("Deployment failed in phase %s: %v", phase, err))
+
+	o.db.Exec(`
+        UPDATE deployment_strategy_state
+        SET current_phase = 'failed',
+            error_message = $2,
+            failed_at = NOW()
+        WHERE deployment_id = $1
+    `, job.DeploymentID, err.Error())
+
+	o.db.Exec(`
+        UPDATE deployments 
+        SET status = $2,
+            error_message = $3,
+            updated_at = NOW()
+        WHERE id = $1
+    `, job.DeploymentID, DeploymentStatusFailed, err.Error())
+
+	o.db.Exec(`
+        INSERT INTO deployment_events
+        (deployment_id, event_type, event_message, severity)
+        VALUES ($1, 'failed', $2, 'critical')
+    `, job.DeploymentID, fmt.Sprintf("Failed in %s: %v", phase, err))
+
+	o.broker.PublishComplete(job.DeploymentID, "failed",
+		fmt.Sprintf("Deployment failed in %s phase", phase),
+		"", err.Error())
+
+	return err
+}
+
+func (o *DeploymentOrchestrator) deactivateOldDeployments(ctx context.Context, job DeploymentJob, newDeploymentID string) error {
+	log.Printf("[cleanup] deactivating old deployments for project %s environment %s", job.ProjectID, job.Environment)
+
+	tx, err := o.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Update old deployments status to terminated and set traffic to 0
+	_, err = tx.ExecContext(ctx, `
+		UPDATE deployments
+		SET status = $1, 
+		    traffic_percentage = 0,
+		    terminated_at = NOW(),
+		    updated_at = NOW()
+		WHERE project_id = $2 
+		  AND environment = $3
+		  AND id != $4
+		  AND status = 'active'
+	`, DeploymentStatusTerminated, job.ProjectID, job.Environment, newDeploymentID)
+	if err != nil {
+		return fmt.Errorf("failed to update old deployment status: %w", err)
+	}
+
+	// Deactivate all traffic routing for old deployments
+	_, err = tx.ExecContext(ctx, `
+		UPDATE deployment_traffic_routing
+		SET is_active = false, deactivated_at = NOW()
+		WHERE deployment_id IN (
+			SELECT id FROM deployments 
+			WHERE project_id = $1 
+			  AND environment = $2
+			  AND id != $3
+		)
+		AND is_active = true
+	`, job.ProjectID, job.Environment, newDeploymentID)
+	if err != nil {
+		return fmt.Errorf("failed to deactivate old traffic routing: %w", err)
+	}
+
+	// Deactivate all containers from old deployments
+	_, err = tx.ExecContext(ctx, `
+		UPDATE deployment_containers
+		SET is_active = false, 
+		    is_primary = false, 
+		    status = 'stopped',
+		    stopped_at = NOW(),
+		    updated_at = NOW()
+		WHERE deployment_id IN (
+			SELECT id FROM deployments 
+			WHERE project_id = $1 
+			  AND environment = $2
+			  AND id != $3
+		)
+		AND is_active = true
+	`, job.ProjectID, job.Environment, newDeploymentID)
+	if err != nil {
+		return fmt.Errorf("failed to deactivate old containers: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	log.Printf("[cleanup] successfully deactivated old deployments")
+	return nil
 }
