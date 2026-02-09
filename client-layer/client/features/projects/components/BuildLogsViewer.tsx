@@ -9,6 +9,18 @@ interface BuildLogsViewerProps {
     onClose: () => void
 }
 
+interface PlatformLogEvent {
+    id: string
+    eventType: string
+    eventSubtype: string
+    severity: 'debug' | 'info' | 'warning' | 'error' | 'fatal'
+    message: string
+    eventTimestamp: string
+    metadata?: Record<string, any>
+}
+
+const MONITORING_SERVICE_URL = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost/monitoring-service'
+
 const BuildLogsViewer: React.FC<BuildLogsViewerProps> = ({ build, onClose }) => {
     const [logs, setLogs] = useState<Array<{ time: string; message: string; type: 'info' | 'success' | 'error' | 'warning' }>>([])
     const [isLoading, setIsLoading] = useState(true)
@@ -21,19 +33,37 @@ const BuildLogsViewer: React.FC<BuildLogsViewerProps> = ({ build, onClose }) => 
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [logs])
 
+    // Helper to convert severity to log type
+    const getLogType = (severity: string): 'info' | 'success' | 'error' | 'warning' => {
+        switch (severity) {
+            case 'error':
+            case 'fatal':
+                return 'error'
+            case 'warning':
+                return 'warning'
+            case 'debug':
+                return 'info'
+            default:
+                return 'info'
+        }
+    }
+
     useEffect(() => {
         const fetchHistoricalLogs = async () => {
             if (hasLoadedHistoricalLogs.current) return
 
             setIsLoading(true)
             try {
-                const resp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${build.id}/logs`)
+                // Use unified platform logs API
+                const resp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(
+                    `${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=build&resource_id=${build.id}&limit=1000`
+                )
 
-                if (resp.status === 200 && resp.data.logs && resp.data.logs.length > 0) {
-                    const transformedLogs = resp.data.logs.map((log: any) => ({
-                        time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
-                        message: log.message,
-                        type: log.log_type as 'info' | 'success' | 'error' | 'warning'
+                if (resp.status === 200 && resp.data.events && resp.data.events.length > 0) {
+                    const transformedLogs = resp.data.events.map((event: PlatformLogEvent) => ({
+                        time: new Date(event.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
+                        message: event.message,
+                        type: getLogType(event.severity)
                     }))
 
                     setLogs(transformedLogs)
@@ -41,6 +71,21 @@ const BuildLogsViewer: React.FC<BuildLogsViewerProps> = ({ build, onClose }) => 
                 }
             } catch (error) {
                 console.error('Error fetching historical logs:', error)
+                // Fallback to old API if unified API is not available
+                try {
+                    const resp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${build.id}/logs`)
+                    if (resp.status === 200 && resp.data.logs && resp.data.logs.length > 0) {
+                        const transformedLogs = resp.data.logs.map((log: any) => ({
+                            time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
+                            message: log.message,
+                            type: log.log_type as 'info' | 'success' | 'error' | 'warning'
+                        }))
+                        setLogs(transformedLogs)
+                        hasLoadedHistoricalLogs.current = true
+                    }
+                } catch (fallbackError) {
+                    console.error('Fallback API also failed:', fallbackError)
+                }
             } finally {
                 setIsLoading(false)
             }
@@ -50,7 +95,10 @@ const BuildLogsViewer: React.FC<BuildLogsViewerProps> = ({ build, onClose }) => 
 
         fetchHistoricalLogs().then(() => {
             if (isActive) {
-                const eventSource = new EventSource(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${build.id}/logs/stream`)
+                // Use unified platform logs streaming API
+                const eventSource = new EventSource(
+                    `${MONITORING_SERVICE_URL}/api/platform-logs/stream/build/${build.id}`
+                )
                 eventSourceRef.current = eventSource
 
                 eventSource.addEventListener('connected', e => {
@@ -59,60 +107,20 @@ const BuildLogsViewer: React.FC<BuildLogsViewerProps> = ({ build, onClose }) => 
 
                 eventSource.addEventListener('log', e => {
                     try {
-                        const logData = JSON.parse(e.data)
+                        const logData: PlatformLogEvent = JSON.parse(e.data)
                         const newLog = {
-                            time: new Date(logData.timestamp).toLocaleTimeString('en-US', { hour12: false }),
+                            time: new Date(logData.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
                             message: logData.message,
-                            type: logData.type
+                            type: getLogType(logData.severity)
                         }
                         setLogs(prev => [...prev, newLog])
+                        
+                        // Update status based on event subtype
+                        if (logData.eventSubtype === 'build_complete') {
+                            setCurrentStatus(logData.severity === 'error' ? 'failed' : 'success')
+                        }
                     } catch (error) {
                         console.error('Error parsing log:', error)
-                    }
-                })
-
-                eventSource.addEventListener('status', e => {
-                    try {
-                        const statusData = JSON.parse(e.data)
-
-                        let normalizedStatus = statusData.status
-                        if (statusData.status === 'completed' || statusData.status === 'complete') {
-                            normalizedStatus = 'success'
-                        }
-
-                        setCurrentStatus(normalizedStatus)
-
-                        const newLog = {
-                            time: new Date(statusData.timestamp).toLocaleTimeString('en-US', { hour12: false }),
-                            message: statusData.message,
-                            type: 'info' as const
-                        }
-                        setLogs(prev => [...prev, newLog])
-                    } catch (error) {
-                        console.error('Error parsing status:', error)
-                    }
-                })
-
-                eventSource.addEventListener('complete', e => {
-                    try {
-                        const statusData = JSON.parse(e.data)
-
-                        let normalizedStatus = statusData.status
-                        if (statusData.status === 'completed' || statusData.status === 'complete') {
-                            normalizedStatus = 'success'
-                        }
-
-                        setCurrentStatus(normalizedStatus)
-
-                        const newLog = {
-                            time: new Date(statusData.timestamp).toLocaleTimeString('en-US', { hour12: false }),
-                            message: statusData.message,
-                            type: normalizedStatus === 'success' ? ('success' as const) : ('error' as const)
-                        }
-                        setLogs(prev => [...prev, newLog])
-                        eventSource.close()
-                    } catch (error) {
-                        console.error('Error parsing completion:', error)
                     }
                 })
 
@@ -122,6 +130,25 @@ const BuildLogsViewer: React.FC<BuildLogsViewerProps> = ({ build, onClose }) => 
                         console.log('SSE connection closed')
                     }
                     eventSource.close()
+                    
+                    // Fallback to old streaming endpoint
+                    const fallbackEventSource = new EventSource(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${build.id}/logs/stream`)
+                    fallbackEventSource.addEventListener('log', e => {
+                        try {
+                            const logData = JSON.parse(e.data)
+                            const newLog = {
+                                time: new Date(logData.timestamp).toLocaleTimeString('en-US', { hour12: false }),
+                                message: logData.message,
+                                type: logData.type
+                            }
+                            setLogs(prev => [...prev, newLog])
+                        } catch (error) {
+                            console.error('Error parsing fallback log:', error)
+                        }
+                    })
+                    fallbackEventSource.addEventListener('complete', () => {
+                        fallbackEventSource.close()
+                    })
                 }
             }
         })

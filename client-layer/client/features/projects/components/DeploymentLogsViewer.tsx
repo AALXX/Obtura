@@ -58,6 +58,19 @@ interface TrafficRouting {
     message: string
 }
 
+interface PlatformLogEvent {
+    id: string
+    eventType: string
+    eventSubtype: string
+    severity: 'debug' | 'info' | 'warning' | 'error' | 'fatal'
+    message: string
+    eventTimestamp: string
+    sourceService: string
+    metadata?: Record<string, any>
+}
+
+const MONITORING_SERVICE_URL = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost/monitoring-service'
+
 const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({ 
     deploymentId, 
     projectId, 
@@ -133,6 +146,21 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
         }
     }, [status, isDeployingMode])
 
+    // Helper to convert severity to log type
+    const getLogType = (severity: string): 'info' | 'success' | 'error' | 'warning' => {
+        switch (severity) {
+            case 'error':
+            case 'fatal':
+                return 'error'
+            case 'warning':
+                return 'warning'
+            case 'debug':
+                return 'info'
+            default:
+                return 'info'
+        }
+    }
+
     // Fetch historical logs
     const fetchHistoricalLogs = async () => {
         if (hasLoadedHistoricalLogs) return
@@ -140,38 +168,72 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
         setIsLoadingHistorical(true)
         const allLogs: LogEntry[] = []
 
-        // Fetch build logs if we have a buildId
+        // Fetch build logs from unified API if we have a buildId
         if (buildId) {
             try {
-                const buildResp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${buildId}/logs`)
-                if (buildResp.status === 200 && buildResp.data.logs && buildResp.data.logs.length > 0) {
-                    const buildLogs = buildResp.data.logs.map((log: any) => ({
-                        time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
-                        message: log.message,
-                        type: log.log_type as 'info' | 'success' | 'error' | 'warning',
+                const buildResp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(
+                    `${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=build&resource_id=${buildId}&limit=1000`
+                )
+                if (buildResp.status === 200 && buildResp.data.events && buildResp.data.events.length > 0) {
+                    const buildLogs = buildResp.data.events.map((event: PlatformLogEvent) => ({
+                        time: new Date(event.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
+                        message: event.message,
+                        type: getLogType(event.severity),
                         source: 'build' as const
                     }))
                     allLogs.push(...buildLogs)
                 }
             } catch (error) {
-                console.error('Error fetching historical build logs:', error)
+                console.error('Error fetching historical build logs from unified API:', error)
+                // Fallback to old API
+                try {
+                    const buildResp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${buildId}/logs`)
+                    if (buildResp.status === 200 && buildResp.data.logs && buildResp.data.logs.length > 0) {
+                        const buildLogs = buildResp.data.logs.map((log: any) => ({
+                            time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
+                            message: log.message,
+                            type: log.log_type as 'info' | 'success' | 'error' | 'warning',
+                            source: 'build' as const
+                        }))
+                        allLogs.push(...buildLogs)
+                    }
+                } catch (fallbackError) {
+                    console.error('Fallback build logs API also failed:', fallbackError)
+                }
             }
         }
 
-        // Fetch deployment logs
+        // Fetch deployment logs from unified API
         try {
-            const deployResp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL}/deployments/${deploymentId}/logs`)
-            if (deployResp.status === 200 && deployResp.data.logs && deployResp.data.logs.length > 0) {
-                const deployLogs = deployResp.data.logs.map((log: any) => ({
-                    time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
-                    message: log.message,
-                    type: log.log_type as 'info' | 'success' | 'error' | 'warning',
+            const deployResp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(
+                `${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=deployment&resource_id=${deploymentId}&limit=1000`
+            )
+            if (deployResp.status === 200 && deployResp.data.events && deployResp.data.events.length > 0) {
+                const deployLogs = deployResp.data.events.map((event: PlatformLogEvent) => ({
+                    time: new Date(event.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
+                    message: event.message,
+                    type: getLogType(event.severity),
                     source: 'deployment' as const
                 }))
                 allLogs.push(...deployLogs)
             }
         } catch (error) {
-            console.error('Error fetching historical deployment logs:', error)
+            console.error('Error fetching historical deployment logs from unified API:', error)
+            // Fallback to old API
+            try {
+                const deployResp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL}/deployments/${deploymentId}/logs`)
+                if (deployResp.status === 200 && deployResp.data.logs && deployResp.data.logs.length > 0) {
+                    const deployLogs = deployResp.data.logs.map((log: any) => ({
+                        time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
+                        message: log.message,
+                        type: log.log_type as 'info' | 'success' | 'error' | 'warning',
+                        source: 'deployment' as const
+                    }))
+                    allLogs.push(...deployLogs)
+                }
+            } catch (fallbackError) {
+                console.error('Fallback deployment logs API also failed:', fallbackError)
+            }
         }
 
         // Sort logs by time
@@ -272,77 +334,122 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
         if (!buildId || !isDeployingMode) return
 
         const connectToBuildSSE = () => {
-            const buildServiceUrl = process.env.NEXT_PUBLIC_BUILD_SERVICE_URL 
-            const eventSource = new EventSource(`${buildServiceUrl}/builds/${buildId}/logs/stream`)
-            buildEventSourceRef.current = eventSource
+            // Try unified API first, fallback to old API on error
+            const unifiedEventSource = new EventSource(
+                `${MONITORING_SERVICE_URL}/api/platform-logs/stream/build/${buildId}`
+            )
+            buildEventSourceRef.current = unifiedEventSource
 
-            eventSource.onopen = () => {
+            unifiedEventSource.onopen = () => {
                 setIsBuildConnected(true)
             }
 
-            eventSource.addEventListener('log', event => {
+            unifiedEventSource.addEventListener('log', event => {
                 try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                    const data: PlatformLogEvent = JSON.parse((event as MessageEvent).data)
+                    const time = new Date(data.eventTimestamp).toLocaleTimeString('en-US', { hour12: false })
 
                     setLiveLogs(prev => [...prev, {
                         time,
                         message: data.message,
-                        type: data.type as 'info' | 'success' | 'error' | 'warning',
+                        type: getLogType(data.severity),
                         source: 'build'
                     }])
+
+                    // Update build phase based on event subtype
+                    if (data.eventSubtype === 'build_start' || data.eventSubtype === 'build_step') {
+                        setBuildPhase(data.metadata?.stepName || 'building')
+                    }
+                    if (data.eventSubtype === 'build_complete') {
+                        setBuildStatus(data.severity === 'error' ? 'failed' : 'completed')
+                        setBuildPhase(data.severity === 'error' ? 'failed' : 'completed')
+                        setBuildCompleted(true)
+                        if (data.severity === 'error') {
+                            setBuildError(data.message)
+                        }
+                    }
                 } catch (error) {
                     console.error('Error parsing build log event:', error)
                 }
             })
 
-            eventSource.addEventListener('status', event => {
-                try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    setBuildStatus(data.status)
-                    setBuildPhase(data.status)
+            unifiedEventSource.onerror = error => {
+                console.error('Unified build SSE error, falling back to legacy API:', error)
+                unifiedEventSource.close()
+                
+                // Fallback to old build service API
+                const buildServiceUrl = process.env.NEXT_PUBLIC_BUILD_SERVICE_URL 
+                const eventSource = new EventSource(`${buildServiceUrl}/builds/${buildId}/logs/stream`)
+                buildEventSourceRef.current = eventSource
 
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: `Phase: ${data.status} - ${data.message}`,
-                        type: 'info',
-                        source: 'build'
-                    }])
-                } catch (error) {
-                    console.error('Error parsing build status event:', error)
+                eventSource.onopen = () => {
+                    setIsBuildConnected(true)
                 }
-            })
 
-            eventSource.addEventListener('complete', event => {
-                try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    setBuildStatus(data.status)
-                    setBuildPhase(data.status)
-                    setBuildCompleted(true)
+                eventSource.addEventListener('log', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
 
-                    if (data.status === 'failed') {
-                        setBuildError(data.errorMessage || 'Build failed')
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: data.message,
+                            type: data.type as 'info' | 'success' | 'error' | 'warning',
+                            source: 'build'
+                        }])
+                    } catch (error) {
+                        console.error('Error parsing build log event:', error)
                     }
+                })
 
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: data.status === 'completed' ? '✓ Build completed successfully' : '✗ Build failed',
-                        type: data.status === 'completed' ? 'success' : 'error',
-                        source: 'build'
-                    }])
+                eventSource.addEventListener('status', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        setBuildStatus(data.status)
+                        setBuildPhase(data.status)
 
-                    eventSource.close()
-                } catch (error) {
-                    console.error('Error parsing build completion event:', error)
-                }
-            })
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: `Phase: ${data.status} - ${data.message}`,
+                            type: 'info',
+                            source: 'build'
+                        }])
+                    } catch (error) {
+                        console.error('Error parsing build status event:', error)
+                    }
+                })
 
-            eventSource.onerror = error => {
-                console.error('Build SSE error:', error)
-                if (isBuildConnected) {
-                    setIsBuildConnected(false)
+                eventSource.addEventListener('complete', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        setBuildStatus(data.status)
+                        setBuildPhase(data.status)
+                        setBuildCompleted(true)
+
+                        if (data.status === 'failed') {
+                            setBuildError(data.errorMessage || 'Build failed')
+                        }
+
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: data.status === 'completed' ? '✓ Build completed successfully' : '✗ Build failed',
+                            type: data.status === 'completed' ? 'success' : 'error',
+                            source: 'build'
+                        }])
+
+                        eventSource.close()
+                    } catch (error) {
+                        console.error('Error parsing build completion event:', error)
+                    }
+                })
+
+                eventSource.onerror = error => {
+                    console.error('Build SSE error:', error)
+                    if (isBuildConnected) {
+                        setIsBuildConnected(false)
+                    }
                 }
             }
         }
@@ -364,130 +471,202 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
         const shouldConnect = ['pending', 'deploying'].includes(status)
 
         if (shouldConnect) {
-            const deployServiceUrl = process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL 
-            const eventSource = new EventSource(`${deployServiceUrl}/deployments/${deploymentId}/logs/stream`)
-            deployEventSourceRef.current = eventSource
+            // Try unified API first
+            const unifiedEventSource = new EventSource(
+                `${MONITORING_SERVICE_URL}/api/platform-logs/stream/deployment/${deploymentId}`
+            )
+            deployEventSourceRef.current = unifiedEventSource
 
-            eventSource.onopen = () => {
+            unifiedEventSource.onopen = () => {
                 setIsConnected(true)
             }
 
-            eventSource.addEventListener('connected', event => {
+            unifiedEventSource.addEventListener('connected', event => {
                 setIsConnected(true)
             })
 
-            eventSource.addEventListener('log', event => {
+            unifiedEventSource.addEventListener('log', event => {
                 try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                    const data: PlatformLogEvent = JSON.parse((event as MessageEvent).data)
+                    const time = new Date(data.eventTimestamp).toLocaleTimeString('en-US', { hour12: false })
 
                     setLiveLogs(prev => [...prev, {
                         time,
                         message: data.message,
-                        type: data.type as 'info' | 'success' | 'error' | 'warning',
+                        type: getLogType(data.severity),
                         source: 'deployment'
                     }])
-                } catch (error) {
-                    console.error('Error parsing log event:', error)
-                }
-            })
 
-            eventSource.addEventListener('phase', event => {
-                try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    setCurrentPhase(data.phase)
+                    // Update deployment phase based on event subtype
+                    if (data.eventSubtype === 'deploy_start') {
+                        setCurrentPhase('deploying_new')
+                    } else if (data.eventSubtype === 'health_check') {
+                        setCurrentPhase('health_checking')
+                    } else if (data.eventSubtype === 'traffic_switch') {
+                        setCurrentPhase('switching_traffic')
+                    } else if (data.eventSubtype === 'deploy_complete') {
+                        if (data.severity === 'error') {
+                            setStatus('failed')
+                            setCurrentPhase('failed')
+                        } else {
+                            setStatus('active')
+                            setCurrentPhase('completed')
+                        }
+                    }
+
+                    // Handle metadata for container and traffic info
                     if (data.metadata) {
                         setPhaseMetadata(data.metadata)
+                        
+                        if (data.metadata.containerId) {
+                            setContainers(prev => {
+                                const updated = new Map(prev)
+                                updated.set(data.metadata!.containerId, {
+                                    containerId: data.metadata!.containerId,
+                                    containerName: data.metadata!.containerName || 'unknown',
+                                    status: data.metadata!.status || 'running',
+                                    health: data.metadata!.healthStatus || 'healthy',
+                                    group: data.metadata!.deploymentGroup || 'default'
+                                })
+                                return updated
+                            })
+                        }
                     }
-
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: `📍 ${data.message}`,
-                        type: 'info',
-                        source: 'deployment'
-                    }])
                 } catch (error) {
-                    console.error('Error parsing phase event:', error)
+                    console.error('Error parsing deployment log event:', error)
                 }
             })
 
-            eventSource.addEventListener('container', event => {
-                try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    setContainers(prev => {
-                        const updated = new Map(prev)
-                        updated.set(data.containerId, data)
-                        return updated
-                    })
+            unifiedEventSource.onerror = error => {
+                console.error('Unified deployment SSE error, falling back to legacy API:', error)
+                unifiedEventSource.close()
+                
+                // Fallback to old deployment service API
+                const deployServiceUrl = process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL 
+                const eventSource = new EventSource(`${deployServiceUrl}/deployments/${deploymentId}/logs/stream`)
+                deployEventSourceRef.current = eventSource
 
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: `🐳 ${data.message}`,
-                        type: data.health === 'healthy' ? 'success' : data.health === 'unhealthy' ? 'error' : 'info',
-                        source: 'deployment'
-                    }])
-                } catch (error) {
-                    console.error('Error parsing container event:', error)
+                eventSource.onopen = () => {
+                    setIsConnected(true)
                 }
-            })
 
-            eventSource.addEventListener('traffic', event => {
-                try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    setTrafficInfo(data)
+                eventSource.addEventListener('connected', event => {
+                    setIsConnected(true)
+                })
 
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: `🚦 ${data.message}`,
-                        type: 'info',
-                        source: 'deployment'
-                    }])
-                } catch (error) {
-                    console.error('Error parsing traffic event:', error)
-                }
-            })
+                eventSource.addEventListener('log', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
 
-            eventSource.addEventListener('complete', event => {
-                try {
-                    const data = JSON.parse((event as MessageEvent).data)
-                    const newStatus = data.status as DeploymentStatus
-                    setStatus(newStatus)
-                    
-                    if (newStatus === 'active') {
-                        setCurrentPhase('completed')
-                    } else if (newStatus === 'failed') {
-                        setCurrentPhase('failed')
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: data.message,
+                            type: data.type as 'info' | 'success' | 'error' | 'warning',
+                            source: 'deployment'
+                        }])
+                    } catch (error) {
+                        console.error('Error parsing log event:', error)
                     }
+                })
 
-                    if (data.errorMessage) {
-                        setErrorMessage(data.errorMessage)
+                eventSource.addEventListener('phase', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        setCurrentPhase(data.phase)
+                        if (data.metadata) {
+                            setPhaseMetadata(data.metadata)
+                        }
+
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: `📍 ${data.message}`,
+                            type: 'info',
+                            source: 'deployment'
+                        }])
+                    } catch (error) {
+                        console.error('Error parsing phase event:', error)
                     }
+                })
 
-                    const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: data.message,
-                        type: data.status === 'active' ? 'success' : 'error',
-                        source: 'deployment'
-                    }])
+                eventSource.addEventListener('container', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        setContainers(prev => {
+                            const updated = new Map(prev)
+                            updated.set(data.containerId, data)
+                            return updated
+                        })
 
-                    eventSource.close()
-                } catch (error) {
-                    console.error('Error parsing completion event:', error)
-                }
-            })
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: `🐳 ${data.message}`,
+                            type: data.health === 'healthy' ? 'success' : data.health === 'unhealthy' ? 'error' : 'info',
+                            source: 'deployment'
+                        }])
+                    } catch (error) {
+                        console.error('Error parsing container event:', error)
+                    }
+                })
 
-            eventSource.addEventListener('heartbeat', () => {
-                // Keep connection alive
-            })
+                eventSource.addEventListener('traffic', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        setTrafficInfo(data)
 
-            eventSource.onerror = error => {
-                console.error('Deployment SSE error:', error)
-                if (isConnected) {
-                    setIsConnected(false)
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: `🚦 ${data.message}`,
+                            type: 'info',
+                            source: 'deployment'
+                        }])
+                    } catch (error) {
+                        console.error('Error parsing traffic event:', error)
+                    }
+                })
+
+                eventSource.addEventListener('complete', event => {
+                    try {
+                        const data = JSON.parse((event as MessageEvent).data)
+                        const newStatus = data.status as DeploymentStatus
+                        setStatus(newStatus)
+                        
+                        if (newStatus === 'active') {
+                            setCurrentPhase('completed')
+                        } else if (newStatus === 'failed') {
+                            setCurrentPhase('failed')
+                        }
+
+                        if (data.errorMessage) {
+                            setErrorMessage(data.errorMessage)
+                        }
+
+                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
+                        setLiveLogs(prev => [...prev, {
+                            time,
+                            message: data.message,
+                            type: data.status === 'active' ? 'success' : 'error',
+                            source: 'deployment'
+                        }])
+
+                        eventSource.close()
+                    } catch (error) {
+                        console.error('Error parsing completion event:', error)
+                    }
+                })
+
+                eventSource.addEventListener('heartbeat', () => {
+                    // Keep connection alive
+                })
+
+                eventSource.onerror = error => {
+                    console.error('Deployment SSE error:', error)
+                    if (isConnected) {
+                        setIsConnected(false)
+                    }
                 }
             }
         }

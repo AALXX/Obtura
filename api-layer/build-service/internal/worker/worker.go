@@ -32,6 +32,8 @@ type Worker struct {
 	builder     *builder.Builder
 	rateLimiter *security.RateLimiter
 	storage     *storage.MinIOStorage
+	projectID   string
+	companyID   string
 }
 
 type EnvConfig struct {
@@ -259,6 +261,9 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		return
 	}
 
+	w.projectID = job.ProjectID
+	w.companyID = companyID
+
 	// Get quota for company (not project)
 	quotaService := security.NewQuotaService(w.db.DB)
 	quotaLimits, err := quotaService.GetQuotaForCompany(ctx, companyID)
@@ -269,7 +274,7 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		msg.Nack(false, false)
 		return
 	}
-	
+
 	var planName string
 	planQuery := `
 		SELECT sp.id
@@ -332,6 +337,9 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 
 	w.db.ExecContext(buildCtx, "UPDATE builds SET status = 'running', started_at = NOW() WHERE id = $1", job.BuildID)
 	w.streamStatus(job.BuildID, "running", "Build started")
+
+	// Send to unified platform logging
+	logger.BuildStart(buildCtx, job.BuildID, job.ProjectID, companyID, 0, job.CommitHash, job.Branch)
 
 	row := w.db.QueryRowContext(buildCtx, "SELECT git_repo_url FROM projects WHERE id = $1", job.ProjectID)
 	if err := row.Scan(&job.GitURL); err != nil {
@@ -735,6 +743,9 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		job.BuildID, len(result.Frameworks), buildTimeSeconds)
 	w.streamLog(job.BuildID, fmt.Sprintf("✅ Build completed successfully with %d service(s) in %dm %ds",
 		len(result.Frameworks), buildTimeSeconds/60, buildTimeSeconds%60))
+
+	// Send to unified platform logging
+	logger.BuildComplete(ctx, job.BuildID, job.ProjectID, w.companyID, true, int64(buildTimeSeconds)*1000)
 
 	if job.Deploy != nil && *job.Deploy {
 		fmt.Println("Deploy is enabled")
@@ -1141,10 +1152,14 @@ func (w *Worker) fetchGitHubToken(ctx context.Context, projectID string) (string
 
 func (w *Worker) streamLog(buildID, message string) {
 	log.Printf("[Build %s] %s", buildID, message)
+
+	// Send to unified platform logging
+	ctx := context.Background()
+	logger.GetPlatformLogger().BuildStep(ctx, buildID, w.projectID, w.companyID, "build", 0, 0, message)
+
+	// Legacy: Keep old logging for backward compatibility during migration
 	logType := "info"
-	if strings.Contains(message, "✅") || strings.Contains(message, "successfully") || strings.Contains(message, "completed") {
-		logType = "success"
-	} else if strings.Contains(message, "❌") || strings.Contains(message, "Failed") || strings.Contains(message, "failed") || strings.Contains(message, "error") {
+	if strings.Contains(message, "❌") || strings.Contains(message, "Failed") || strings.Contains(message, "failed") || strings.Contains(message, "error") {
 		logType = "error"
 	} else if strings.Contains(message, "⚠️") || strings.Contains(message, "warning") {
 		logType = "warn"
@@ -1154,7 +1169,7 @@ func (w *Worker) streamLog(buildID, message string) {
 		logBroker.PublishLog(buildID, logType, message)
 	}
 
-	ctx := context.Background()
+	// Legacy DB insert
 	w.db.ExecContext(ctx,
 		"INSERT INTO build_logs (build_id, log_type, message, created_at) VALUES ($1, $2, $3, NOW())",
 		buildID, logType, message,

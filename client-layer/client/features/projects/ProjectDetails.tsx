@@ -589,7 +589,20 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-3">
-                                                    <button className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
+                                                    <button
+                                                        className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+                                                        onClick={() => {
+                                                            const matchingDeployment = liveDeployments.find(d => d.environment === deployment.type)
+                                                            setCurrentDeploymentId(matchingDeployment?.id || null)
+                                                            setCurrentDeploymentBuildId(matchingDeployment?.buildId || null)
+                                                            setDeploymentEnvironment(deployment.type as 'production' | 'staging' | 'preview')
+                                                            setDeploymentStrategy(matchingDeployment?.deploymentStrategy || 'blue_green')
+                                                            setCurrentDeploymentMode('history')
+                                                            const containers = (matchingDeployment as any)?.containers || deployment.containers || []
+                                                            setCurrentContainers(containers as Container[])
+                                                            setShowDeploymentLogs(true)
+                                                        }}
+                                                    >
                                                         <Eye size={16} />
                                                         View Logs
                                                     </button>
@@ -789,8 +802,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                         {liveDeployments.map(deployment => {
                                             const getStatusDisplay = () => {
                                                 // Check if deployment has a build in progress
-                                                if (deployment.buildId && deployment.buildStatus && 
-                                                    ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus)) {
+                                                if (deployment.buildId && deployment.buildStatus && ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus)) {
                                                     return { icon: Loader2, text: 'Building', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
                                                 }
                                                 switch (deployment.status) {
@@ -1026,7 +1038,20 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                 </div>
 
                                                 <div className="flex items-center gap-2">
-                                                    <button className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
+                                                    <button
+                                                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800"
+                                                        onClick={() => {
+                                                            const matchingDeployment = liveDeployments.find(d => d.environment === 'production')
+                                                            setCurrentDeploymentId(matchingDeployment?.id || null)
+                                                            setCurrentDeploymentBuildId(matchingDeployment?.buildId || null)
+                                                            setDeploymentEnvironment('production')
+                                                            setDeploymentStrategy(matchingDeployment?.deploymentStrategy || 'blue_green')
+                                                            setCurrentDeploymentMode('history')
+                                                            const containers = (matchingDeployment as any)?.containers || []
+                                                            setCurrentContainers(containers as Container[])
+                                                            setShowDeploymentLogs(true)
+                                                        }}
+                                                    >
                                                         <Eye size={16} />
                                                     </button>
                                                     <button className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
@@ -1457,12 +1482,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                     </div>
                 )}
 
-                {activeTab === 'settings' && (
-                    <DeploymentSettings 
-                        projectId={projectData.id} 
-                        accessToken={accessToken} 
-                    />
-                )}
+                {activeTab === 'settings' && <DeploymentSettings projectId={projectData.id} accessToken={accessToken} />}
                 {showBuildLogs && selectedBuild && (
                     <DialogCanvas closeDialog={() => setShowBuildLogs(false)}>
                         <BuildLogsViewer build={selectedBuild} onClose={() => setShowBuildLogs(false)} />

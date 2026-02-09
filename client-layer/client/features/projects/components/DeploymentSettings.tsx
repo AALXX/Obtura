@@ -30,7 +30,6 @@ const DeploymentSettings: React.FC<DeploymentSettingsProps> = ({ projectId, acce
     const [activeTab, setActiveTab] = useState('general')
     const [isLoading, setIsLoading] = useState(false)
 
-    // General Settings
     const [generalSettings, setGeneralSettings] = useState({
         framework: 'nextjs',
         buildCommand: 'npm run build',
@@ -41,24 +40,20 @@ const DeploymentSettings: React.FC<DeploymentSettingsProps> = ({ projectId, acce
         monorepo: false
     })
 
-    // Environment Variables
     const [environmentVariables, setEnvironmentVariables] = useState([
         { key: 'NODE_ENV', value: 'production', environment: 'all' },
         { key: 'PORT', value: '3000', environment: 'all' }
     ])
 
-    // Domains
     const [domains, setDomains] = useState([
         { name: 'primary', domain: 'example.com', type: 'production', sslEnabled: true }
     ])
 
-    // Deployment Rules
     const [deploymentRules, setDeploymentRules] = useState<DeploymentRule[]>([
         { id: '1', name: 'Production Deploy', branch: 'main', environment: 'production', autoDeploy: true, framework: 'nextjs' },
         { id: '2', name: 'Staging Deploy', branch: 'develop', environment: 'staging', autoDeploy: true, framework: 'nextjs' }
     ])
 
-    // Performance Settings
     const [performanceSettings, setPerformanceSettings] = useState({
         enableCaching: true,
         cacheTTL: '3600',
@@ -68,7 +63,6 @@ const DeploymentSettings: React.FC<DeploymentSettingsProps> = ({ projectId, acce
         minifyAssets: true
     })
 
-    // Security Settings
     const [securitySettings, setSecuritySettings] = useState({
         enableHTTPS: true,
         enforceHTTPS: true,
@@ -79,7 +73,6 @@ const DeploymentSettings: React.FC<DeploymentSettingsProps> = ({ projectId, acce
         enableSecurityHeaders: true
     })
 
-    // Build Settings
     const [buildSettings, setBuildSettings] = useState({
         enableBuildCache: true,
         parallelBuilds: true,

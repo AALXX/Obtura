@@ -57,6 +57,10 @@ func main() {
 
 	rabbitMQURL := pkg.GetEnv("RABBITMQ_URL", "amqp://obtura:obtura123@rabbitmq:5672")
 
+	// Initialize unified platform logger
+	logger.InitPlatformLogger()
+	log.Println("✅ Platform logger initialized")
+
 	r := gin.Default()
 
 	// CORS middleware for SSE

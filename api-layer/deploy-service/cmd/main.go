@@ -38,6 +38,10 @@ func main() {
 	// Initialize deployment broker with database support
 	deployment_logger.InitDeploymentBroker(db.DB)
 
+	// Initialize unified platform logger
+	deployment_logger.InitPlatformLogger()
+	log.Println("✅ Platform logger initialized")
+
 	redisURL := pkg.GetEnv("REDIS_URL", "redis://localhost:6379/0")
 	rateLimiter, err := security.NewRateLimiter(redisURL)
 	if err != nil {

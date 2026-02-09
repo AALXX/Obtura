@@ -135,6 +135,10 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 		return o.handleFailure(job, "get_company_id", err)
 	}
 
+	// Send to unified platform logging
+	deploymentStartTime := time.Now()
+	deployment_logger.DeployStart(ctx, job.DeploymentID, job.ProjectID, companyID, job.Environment, job.Strategy)
+
 	o.broker.PublishLog(job.DeploymentID, "info", "Checking deployment quotas...")
 
 	if err := o.checkDeploymentQuotaWithCompany(ctx, job, companyID); err != nil {
@@ -189,6 +193,10 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 	o.broker.PublishComplete(job.DeploymentID, "active",
 		"Deployment completed successfully",
 		formatDuration(time.Since(time.Now())), "")
+
+	// Send to unified platform logging
+	deploymentDurationMs := time.Since(deploymentStartTime).Milliseconds()
+	deployment_logger.DeployComplete(ctx, job.DeploymentID, job.ProjectID, companyID, true, deploymentDurationMs)
 
 	log.Printf("✅ Deployment %s completed successfully", job.DeploymentID)
 	return nil
