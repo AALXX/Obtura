@@ -1,17 +1,20 @@
 'use client'
-import React, { useRef, useState } from 'react'
-import { Rocket, Settings, Activity, Globe, GitBranch, Clock, CheckCircle2, XCircle, AlertCircle, Eye, Code, Server, Lock, RotateCcw, Play, Pause, Plus, Trash2, Copy, ExternalLink, TrendingUp, Zap, Shield, Layers, Package, Hammer, Upload, Calendar, Save, Loader2 } from 'lucide-react'
-import { Build, BuildStatus, DeploymentConfig, Deployment, ProjectData, Container } from './Types/ProjectTypes'
+import React, { useEffect, useRef, useState } from 'react'
+import { Rocket, Settings, Activity, Globe, GitBranch, Clock, CheckCircle2, XCircle, Eye, Code, Server, Lock, RotateCcw, Play, Pause, Plus, Trash2, Copy, ExternalLink, TrendingUp, Zap, Shield, Layers, Package, Hammer, Upload, Calendar, Save, Loader2, AlertCircle } from 'lucide-react'
+import { Build, BuildStatus, DeploymentConfig, Deployment, ProjectData, Container, Alert, EnvironmentDeployment } from './Types/ProjectTypes'
 import EnvFileUpload from '../account/components/EnvFileUpload'
 import DialogCanvas from '@/common-components/DialogCanvas'
 import axios from 'axios'
 import BuildDialog from './components/BuildDialog'
+import BuildConfigDialog from './components/BuildConfigDialog'
 import BuildLogsViewer from './components/BuildLogsViewer'
 import EnvVarsCard from './components/EnvVarCard'
 import { useBuildUpdates } from '@/hooks/useBuildUpdates'
 import DeployDialog from './components/DeployDialog'
+import AlertCard from './components/AlertCard'
 import DeploymentLogsViewer from './components/DeploymentLogsViewer'
 import DeploymentSettings from './components/DeploymentSettings'
+import MonitoringDashboard from './components/MonitoringDashboard'
 import { useDeploymentUpdates } from '@/hooks/useDeployuseDeploymentUpdates'
 
 const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; services: { service_name: string; env_vars: Record<string, string> }[] }> = ({ projectData, accessToken, services }) => {
@@ -38,6 +41,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     const [newEnvService, setNewEnvService] = useState('')
     const [isDeploying, setIsDeploying] = useState(false)
     const [openBuildDialog, setOpenBuildDialog] = useState(false)
+    const [showBuildConfigDialog, setShowBuildConfigDialog] = useState(false)
     const [showEnvFileDialog, setShowEnvFileDialog] = useState(false)
 
     const [currentBuildId, setCurrentBuildId] = useState<string | null>(null)
@@ -45,13 +49,9 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     // Deploy dialog state
     const [showDeployDialog, setShowDeployDialog] = useState(false)
     const [deployEnvironment, setDeployEnvironment] = useState('')
-    const [deploySource, setDeploySource] = useState<'build' | 'branch'>('build')
-    const [deploySelectedBuild, setDeploySelectedBuild] = useState('')
     const [selectedBranch, setSelectedBranch] = useState(projectData.production?.branch || 'main')
-    const [showAdvanced, setShowAdvanced] = useState(false)
     const [deploymentStrategy, setDeploymentStrategy] = useState(projectData.production?.deploymentStrategy || 'blue_green')
     const [enableMonitoring, setEnableMonitoring] = useState(true)
-    const [autoScaling, setAutoScaling] = useState(false)
     const [deploymentEnvironment, setDeploymentEnvironment] = useState<'production' | 'staging' | 'preview'>('production')
 
     const [showDeploymentLogs, setShowDeploymentLogs] = useState(false)
@@ -59,6 +59,15 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     const [currentDeploymentBuildId, setCurrentDeploymentBuildId] = useState<string | null>(null)
     const [currentDeploymentMode, setCurrentDeploymentMode] = useState<'deploying' | 'history'>('deploying')
     const [currentContainers, setCurrentContainers] = useState<Container[]>([])
+    const [isBuildAndDeploy, setIsBuildAndDeploy] = useState(false)
+
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+    const [deploymentToDelete, setDeploymentToDelete] = useState<string | null>(null)
+    const [isDeletingDeployment, setIsDeletingDeployment] = useState(false)
+    const [deleteNotification, setDeleteNotification] = useState<{ show: boolean; success: boolean; message: string }>({ show: false, success: false, message: '' })
+
+    const [productionEnv, setProductionEnv] = useState<EnvironmentDeployment | null>(projectData.production)
+    const [stagingEnv, setStagingEnv] = useState<EnvironmentDeployment | null>(projectData.staging)
 
     const [deployments, setDeployments] = useState<Deployment[]>(
         projectData.deployments.map(deployment => ({
@@ -81,10 +90,109 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             strategyPhase: deployment.strategyPhase,
             trafficSwitchCount: deployment.trafficSwitchCount,
             errorMessage: deployment.errorMessage,
-            containers: (deployment as any).containers || []
+            containers: (deployment as any).containers || [],
+            unresolvedAlerts: deployment.unresolvedAlerts || [],
+            unresolvedAlertCount: deployment.unresolvedAlertCount || 0
         }))
     )
     const liveDeployments = useDeploymentUpdates(projectData.id, deployments)
+
+    useEffect(() => {
+        const productionDeployment = liveDeployments.find(d => d.environment === 'production')
+        const stagingDeployment = liveDeployments.find(d => d.environment === 'staging')
+
+        if (productionDeployment) {
+            setProductionEnv(prev => prev ? {
+                ...prev,
+                status: productionDeployment.status,
+                deploymentStrategy: productionDeployment.deploymentStrategy,
+                branch: productionDeployment.branch,
+                commitHash: productionDeployment.commitHash,
+                containers: productionDeployment.containers || [],
+                totalContainers: productionDeployment.containers?.length || 0,
+                healthyContainers: productionDeployment.containers?.filter(c => c.healthStatus === 'healthy').length || 0,
+                unresolvedAlerts: productionDeployment.unresolvedAlerts || [],
+                unresolvedAlertCount: productionDeployment.unresolvedAlertCount || 0
+            } : null)
+        }
+
+        if (stagingDeployment) {
+            setStagingEnv(prev => prev ? {
+                ...prev,
+                status: stagingDeployment.status,
+                deploymentStrategy: stagingDeployment.deploymentStrategy,
+                branch: stagingDeployment.branch,
+                commitHash: stagingDeployment.commitHash,
+                containers: stagingDeployment.containers || [],
+                totalContainers: stagingDeployment.containers?.length || 0,
+                healthyContainers: stagingDeployment.containers?.filter(c => c.healthStatus === 'healthy').length || 0,
+                unresolvedAlerts: stagingDeployment.unresolvedAlerts || [],
+                unresolvedAlertCount: stagingDeployment.unresolvedAlertCount || 0
+            } : null)
+        }
+    }, [liveDeployments])
+
+    useEffect(() => {
+        const fetchUpdatedDeploymentData = async () => {
+            try {
+                console.log('Fetching updated deployment data...')
+                const resp = await axios.get<{ error: boolean; project: any }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/get-project-details/${projectData.id}/${accessToken}`)
+                console.log('API Response:', resp.data)
+                
+                if (resp.data?.error === false && resp.data?.project) {
+                    const updatedProject = resp.data.project
+                    console.log('Updated project production:', updatedProject.production)
+                    console.log('Updated project staging:', updatedProject.staging)
+                    
+                    if (updatedProject.production) {
+                        setProductionEnv(prev => {
+                            console.log('Merging production:', prev, 'with', updatedProject.production)
+                            return prev ? { ...prev, ...updatedProject.production } : updatedProject.production
+                        })
+                    }
+                    if (updatedProject.staging) {
+                        setStagingEnv(prev => {
+                            console.log('Merging staging:', prev, 'with', updatedProject.staging)
+                            return prev ? { ...prev, ...updatedProject.staging } : updatedProject.staging
+                        })
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to fetch updated deployment data:', error)
+            }
+        }
+
+        const productionDeployment = liveDeployments.find(d => d.environment === 'production')
+        const stagingDeployment = liveDeployments.find(d => d.environment === 'staging')
+
+        console.log('Checking for active deployment - production:', productionDeployment?.status, 'staging:', stagingDeployment?.status)
+
+        if (productionDeployment?.status === 'active' || stagingDeployment?.status === 'active') {
+            fetchUpdatedDeploymentData()
+        }
+    }, [liveDeployments, accessToken, projectData.id])
+
+    const [alerts, setAlerts] = useState<Alert[]>(() => {
+        const productionAlerts = projectData.production?.unresolvedAlerts || []
+        const stagingAlerts = projectData.staging?.unresolvedAlerts || []
+        const deploymentAlerts = projectData.deployments.flatMap(d => d.unresolvedAlerts || [])
+        const projectAlerts = (projectData as any).alerts || []
+        const allAlerts = [...productionAlerts, ...stagingAlerts, ...deploymentAlerts, ...projectAlerts]
+        const uniqueAlerts = Array.from(new Map(allAlerts.map(a => [a.id, a])).values())
+        return uniqueAlerts
+    })
+
+    const [resolvingAlerts, setResolvingAlerts] = useState<Set<string>>(new Set())
+
+    useEffect(() => {
+        const productionAlerts = projectData.production?.unresolvedAlerts || []
+        const stagingAlerts = projectData.staging?.unresolvedAlerts || []
+        const deploymentAlerts = projectData.deployments.flatMap(d => d.unresolvedAlerts || [])
+        const projectAlerts = (projectData as any).alerts || []
+        const allAlerts = [...productionAlerts, ...stagingAlerts, ...deploymentAlerts, ...projectAlerts]
+        const uniqueAlerts = Array.from(new Map(allAlerts.map(a => [a.id, a])).values())
+        setAlerts(uniqueAlerts)
+    }, [projectData.production?.unresolvedAlerts, projectData.staging?.unresolvedAlerts, projectData.deployments, (projectData as any).alerts])
 
     const [builds, setBuilds] = useState<Build[]>(
         projectData.builds.map(build => ({
@@ -93,6 +201,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             branch: build.branch,
             commitHash: build.commitHash,
             startTime: build.createdAt,
+            createdAt: build.createdAt,
             duration: build.buildTime || undefined,
             framework: build.framework || undefined,
             initiatedBy: build.initiatedBy || undefined,
@@ -135,7 +244,6 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 return
             }
 
-            // Add new deployment to state
             if (resp.data.deploymentId) {
                 const newDeployment: Deployment = {
                     id: resp.data.deploymentId,
@@ -162,12 +270,46 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
                 setDeployments(prev => [newDeployment, ...prev])
 
+                const newEnv: EnvironmentDeployment = {
+                    url: `${projectData.slug}.obtura.app`,
+                    status: 'active',
+                    deploymentStrategy: config.strategy || 'blue_green',
+                    branch: resp.data.branch,
+                    commitHash: resp.data.commitHash,
+                    lastDeployment: 'Just now',
+                    containers: [],
+                    totalContainers: 0,
+                    healthyContainers: 0,
+                    unhealthyContainers: 0,
+                    unresolvedAlerts: [],
+                    unresolvedAlertCount: 0,
+                    replicaCount: 1,
+                    autoScalingEnabled: false,
+                    instanceType: null,
+                    trafficPercentage: 0,
+                    currentRequestsPerMinute: 0,
+                    avgResponseTime: '0ms',
+                    errorRate: '0%',
+                    sslEnabled: true,
+                    monitoringEnabled: true,
+                    deploymentTrigger: 'manual',
+                    buildTime: null,
+                    framework: null,
+                    strategyDetails: null
+                }
+                if (config.environment === 'production') {
+                    setProductionEnv(newEnv)
+                } else {
+                    setStagingEnv(newEnv)
+                }
+
                 // Show deployment logs viewer in deploying mode
                 setCurrentDeploymentId(resp.data.deploymentId)
                 setCurrentDeploymentBuildId(resp.data.buildId || config.buildId || null)
                 setDeploymentEnvironment(config.environment || 'production')
                 setDeploymentStrategy(config.strategy || 'blue_green')
                 setCurrentDeploymentMode('deploying')
+                setIsBuildAndDeploy(!config.buildId) // true if no buildId provided (new build needed)
                 setShowDeploymentLogs(true)
                 setShowDeployDialog(false)
             }
@@ -178,6 +320,39 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             setIsDeploying(false)
         }
     }
+
+    const handleResolveAlert = async (alertId: string) => {
+        setResolvingAlerts(prev => new Set(prev).add(alertId))
+
+        try {
+            await axios.post(`${process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL}/api/alerts/${alertId}/resolve/${accessToken}`)
+
+            setAlerts(prev => prev.filter(alert => alert.id !== alertId))
+
+            setDeployments(prev =>
+                prev.map(deployment => {
+                    if (!deployment.unresolvedAlerts) return deployment
+
+                    const updatedAlerts = deployment.unresolvedAlerts.filter(alert => alert.id !== alertId)
+                    return {
+                        ...deployment,
+                        unresolvedAlerts: updatedAlerts,
+                        unresolvedAlertCount: updatedAlerts.length
+                    }
+                })
+            )
+        } catch (error) {
+            console.error('Error resolving alert:', error)
+            alert('Failed to resolve alert. Please try again.')
+        } finally {
+            setResolvingAlerts(prev => {
+                const newSet = new Set(prev)
+                newSet.delete(alertId)
+                return newSet
+            })
+        }
+    }
+
     const handleAddEnvVar = () => {
         if (newEnvKey && newEnvValue && (selectedService !== '__new__' ? selectedService : newEnvService)) {
             const service = selectedService === '__new__' ? newEnvService : selectedService
@@ -277,11 +452,27 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         }
     }
 
-    const handleStartBuild = async () => {
+    const handleStartBuild = () => {
+        setShowBuildConfigDialog(true)
+    }
+
+    const handleConfiguredBuild = async (config: {
+        branch: string
+        commit: string
+        buildCommand?: string
+        installCommand?: string
+        rootDirectory?: string
+        nodeVersion?: string
+        enableCache?: boolean
+    }) => {
+        setShowBuildConfigDialog(false)
+        
         try {
             const resp = await axios.post<{ buildId: string; commitHash: string; branch: string; status: string }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/trigger-build`, {
                 projectId: projectData.id,
-                accessToken: accessToken
+                accessToken: accessToken,
+                branch: config.branch,
+                commitHash: config.commit
             })
 
             console.log('Build triggered:', resp.data)
@@ -298,8 +489,8 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             const newBuild: Build = {
                 id: newBuildId,
                 status: 'queued',
-                branch: resp.data.branch || 'main',
-                commitHash: resp.data.commitHash?.substring(0, 7) || 'pending...',
+                branch: resp.data.branch || config.branch,
+                commitHash: config.commit?.substring(0, 7) || 'pending...',
                 startTime: new Date().toLocaleString(),
                 duration: undefined
             }
@@ -337,6 +528,54 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         }
     }
 
+    const handleDeleteDeployment = async (deploymentId: string) => {
+        setDeploymentToDelete(deploymentId)
+        setShowDeleteConfirm(true)
+    }
+
+    const confirmDeleteDeployment = async () => {
+        if (!deploymentToDelete) return
+
+        const deploymentToRemove = deployments.find(d => d.id === deploymentToDelete)
+        const deletedEnv = deploymentToRemove?.environment
+
+        setIsDeletingDeployment(true)
+        try {
+            const response = await axios({
+                method: 'delete',
+                url: `${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/delete-deployment/${deploymentToDelete}`,
+                data: {
+                    projectId: projectData.id,
+                    accessToken: accessToken
+                }
+            })
+
+            if (response.status === 200) {
+                setDeployments(prev => prev.filter(deployment => deployment.id !== deploymentToDelete))
+
+                const remainingInEnv = deployments.filter(d => d.environment === deletedEnv && d.id !== deploymentToDelete)
+                if (remainingInEnv.length === 0) {
+                    if (deletedEnv === 'production') {
+                        setProductionEnv(null)
+                    } else if (deletedEnv === 'staging') {
+                        setStagingEnv(null)
+                    }
+                }
+
+                setDeleteNotification({ show: true, success: true, message: 'Deployment deleted successfully' })
+                setTimeout(() => setDeleteNotification({ show: false, success: false, message: '' }), 3000)
+            }
+        } catch (error) {
+            console.error('Error deleting deployment:', error)
+            setDeleteNotification({ show: true, success: false, message: 'Failed to delete deployment. Please try again.' })
+            setTimeout(() => setDeleteNotification({ show: false, success: false, message: '' }), 3000)
+        } finally {
+            setIsDeletingDeployment(false)
+            setShowDeleteConfirm(false)
+            setDeploymentToDelete(null)
+        }
+    }
+
     const handleBuildStatusChange = (buildData: any) => {
         setBuilds(prev =>
             prev.map(build => {
@@ -366,7 +605,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         { id: 'builds', label: 'Builds', icon: Hammer }
     ]
 
-    const hasDeployments = projectData.production.url || projectData.staging.url || projectData.preview.length > 0
+    const hasDeployments = productionEnv?.url || stagingEnv?.url || projectData.preview.length > 0
 
     return (
         <div className="min-h-screen text-white">
@@ -449,6 +688,19 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 </DialogCanvas>
             )}
 
+            {showBuildConfigDialog && (
+                <DialogCanvas closeDialog={() => setShowBuildConfigDialog(false)}>
+                    <BuildConfigDialog
+                        accessToken={accessToken}
+                        projectId={projectData.id}
+                        gitRepoUrl={projectData.gitRepoUrl}
+                        currentBranch={projectData.production?.branch || 'main'}
+                        onBuild={handleConfiguredBuild}
+                        onClose={() => setShowBuildConfigDialog(false)}
+                    />
+                </DialogCanvas>
+            )}
+
             {showDeploymentLogs && currentDeploymentId && (
                 <DialogCanvas closeDialog={() => setShowDeploymentLogs(false)}>
                     <DeploymentLogsViewer
@@ -459,11 +711,13 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                         buildId={currentDeploymentBuildId || undefined}
                         containers={currentContainers}
                         mode={currentDeploymentMode}
+                        isBuildAndDeploy={isBuildAndDeploy}
                         onClose={() => {
                             setShowDeploymentLogs(false)
                             setCurrentDeploymentId(null)
                             setCurrentDeploymentBuildId(null)
                             setCurrentContainers([])
+                            setIsBuildAndDeploy(false)
                         }}
                     />
                 </DialogCanvas>
@@ -471,8 +725,60 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
             {showDeployDialog && (
                 <DialogCanvas closeDialog={() => setShowDeployDialog(false)}>
-                    <DeployDialog accessToken={accessToken} projectId={projectData.id} builds={projectData.builds} currentBranch={projectData.production.branch || 'main'} deploymentStrategy={projectData.production.deploymentStrategy || 'blue_green'} onDeploy={handleDeploy} onClose={() => setShowDeployDialog(false)} />
+                    <DeployDialog accessToken={accessToken} projectId={projectData.id} gitRepoUrl={projectData.gitRepoUrl} builds={liveBuilds} currentBranch={productionEnv?.branch || stagingEnv?.branch || 'main'} deploymentStrategy={productionEnv?.deploymentStrategy || 'blue_green'} onDeploy={handleDeploy} onClose={() => setShowDeployDialog(false)} />
                 </DialogCanvas>
+            )}
+
+            {showDeleteConfirm && (
+                <DialogCanvas closeDialog={() => { setShowDeleteConfirm(false); setDeploymentToDelete(null) }}>
+                    <div className="w-full max-w-md p-6">
+                        <div className="mb-4 flex items-center gap-3">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10">
+                                <Trash2 className="h-6 w-6 text-red-500" />
+                            </div>
+                            <h3 className="text-xl font-semibold">Delete Deployment</h3>
+                        </div>
+                        <p className="mb-6 text-zinc-400">
+                            Are you sure you want to delete this deployment? This will stop and remove all running containers. This action cannot be undone.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => { setShowDeleteConfirm(false); setDeploymentToDelete(null) }}
+                                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmDeleteDeployment}
+                                disabled={isDeletingDeployment}
+                                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
+                            >
+                                {isDeletingDeployment ? (
+                                    <>
+                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                                        Deleting...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Trash2 size={16} />
+                                        Delete Deployment
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </DialogCanvas>
+            )}
+
+            {deleteNotification.show && (
+                <div className={`fixed right-4 top-4 z-50 flex items-center gap-3 rounded-lg px-4 py-3 shadow-lg ${deleteNotification.success ? 'bg-green-500/90' : 'bg-red-500/90'}`}>
+                    {deleteNotification.success ? (
+                        <CheckCircle2 size={20} className="text-white" />
+                    ) : (
+                        <XCircle size={20} className="text-white" />
+                    )}
+                    <span className="text-sm font-medium text-white">{deleteNotification.message}</span>
+                </div>
             )}
 
             <div className="border-b border-zinc-800">
@@ -502,25 +808,25 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                         {(() => {
                             const deployments = []
 
-                            if (projectData.production.url) {
+                            if (productionEnv?.url) {
                                 deployments.push({
                                     type: 'production',
                                     icon: Globe,
                                     iconColor: 'text-green-500',
                                     iconBg: 'bg-green-500/10',
-                                    statusColor: projectData.production.status === 'active' ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500',
-                                    ...projectData.production
+                                    statusColor: productionEnv?.status === 'active' ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500',
+                                    ...productionEnv
                                 })
                             }
 
-                            if (projectData.staging.url) {
+                            if (stagingEnv?.url) {
                                 deployments.push({
                                     type: 'staging',
                                     icon: Server,
                                     iconColor: 'text-blue-500',
                                     iconBg: 'bg-blue-500/10',
-                                    statusColor: projectData.staging.status === 'active' ? 'bg-blue-500/10 text-blue-500' : 'bg-zinc-500/10 text-zinc-500',
-                                    ...projectData.staging
+                                    statusColor: stagingEnv.status === 'active' ? 'bg-blue-500/10 text-blue-500' : 'bg-zinc-500/10 text-zinc-500',
+                                    ...stagingEnv
                                 })
                             }
 
@@ -598,6 +904,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                             setDeploymentEnvironment(deployment.type as 'production' | 'staging' | 'preview')
                                                             setDeploymentStrategy(matchingDeployment?.deploymentStrategy || 'blue_green')
                                                             setCurrentDeploymentMode('history')
+                                                            setIsBuildAndDeploy(false)
                                                             const containers = (matchingDeployment as any)?.containers || deployment.containers || []
                                                             setCurrentContainers(containers as Container[])
                                                             setShowDeploymentLogs(true)
@@ -609,6 +916,18 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                     <button disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                                                         <RotateCcw size={16} />
                                                         Redeploy
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            const matchingDeployment = liveDeployments.find(d => d.environment === deployment.type)
+                                                            if (matchingDeployment) {
+                                                                handleDeleteDeployment(matchingDeployment.id)
+                                                            }
+                                                        }}
+                                                        className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                        Delete
                                                     </button>
                                                 </div>
                                             </div>
@@ -707,26 +1026,14 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                         </div>
                                                     )}
 
-                                                    {/* Alerts */}
-                                                    {deployment.unresolvedAlerts && deployment.unresolvedAlerts.length > 0 && (
+                                                    {/* Show active alerts for this deployment - using centralized alerts state */}
+                                                    {alerts.length > 0 && (
                                                         <div className="mb-6">
-                                                            <h4 className="mb-3 font-semibold text-red-400">Unresolved Alerts ({deployment.unresolvedAlertCount})</h4>
+                                                            <h4 className="mb-3 font-semibold text-red-400">Active Alerts ({alerts.length})</h4>
+
                                                             <div className="space-y-2">
-                                                                {deployment.unresolvedAlerts.slice(0, 3).map(alert => (
-                                                                    <div key={alert.id} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-                                                                        <div className="flex items-center gap-3">
-                                                                            <AlertCircle className="text-red-500" size={16} />
-                                                                            <div className="flex-1">
-                                                                                <div className="text-sm font-medium">{alert.message}</div>
-                                                                                <div className="text-xs text-zinc-400">{new Date(alert.timestamp).toLocaleString()}</div>
-                                                                            </div>
-                                                                            <span
-                                                                                className={`rounded-full px-2 py-1 text-xs ${alert.severity === 'critical' ? 'bg-red-500/10 text-red-500' : alert.severity === 'high' ? 'bg-orange-500/10 text-orange-500' : alert.severity === 'medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-blue-500/10 text-blue-500'}`}
-                                                                            >
-                                                                                {alert.severity}
-                                                                            </span>
-                                                                        </div>
-                                                                    </div>
+                                                                {alerts.slice(0, 3).map(alert => (
+                                                                    <AlertCard key={alert.id} alert={alert} handleResolve={handleResolveAlert} isResolving={resolvingAlerts.has(alert.id)} />
                                                                 ))}
                                                             </div>
                                                         </div>
@@ -898,13 +1205,19 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                                     setDeploymentEnvironment(deployment.environment)
                                                                     setDeploymentStrategy(deployment.deploymentStrategy)
                                                                     setCurrentDeploymentMode('history')
+                                                                    setIsBuildAndDeploy(false)
                                                                     const containers = (deployment as any).containers || []
-                                                                    console.log('[DeploymentLogs] Setting containers:', containers.length, containers)
                                                                     setCurrentContainers(containers as Container[])
                                                                     setShowDeploymentLogs(true)
                                                                 }}
                                                             >
                                                                 <Eye size={16} />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleDeleteDeployment(deployment.id)}
+                                                                className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40"
+                                                            >
+                                                                <Trash2 size={16} />
                                                             </button>
                                                         </div>
                                                     </td>
@@ -1015,7 +1328,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                 </div>
                             ) : (
                                 <>
-                                    {projectData.production.url && (
+                                    {productionEnv?.url && (
                                         <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
                                             <div className="mb-4 flex items-center justify-between">
                                                 <div className="flex items-center gap-3">
@@ -1030,8 +1343,8 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                                 Live
                                                             </span>
                                                         </div>
-                                                        <a href={projectData.production.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
-                                                            {projectData.production.url}
+                                                        <a href={productionEnv.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
+                                                            {productionEnv.url}
                                                             <ExternalLink size={12} />
                                                         </a>
                                                     </div>
@@ -1047,6 +1360,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                             setDeploymentEnvironment('production')
                                                             setDeploymentStrategy(matchingDeployment?.deploymentStrategy || 'blue_green')
                                                             setCurrentDeploymentMode('history')
+                                                            setIsBuildAndDeploy(false)
                                                             const containers = (matchingDeployment as any)?.containers || []
                                                             setCurrentContainers(containers as Container[])
                                                             setShowDeploymentLogs(true)
@@ -1063,25 +1377,25 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                             <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
                                                 <div>
                                                     <div className="text-zinc-400">Last Deploy</div>
-                                                    <div className="font-medium">{projectData.production.lastDeployment}</div>
+                                                    <div className="font-medium">{productionEnv.lastDeployment}</div>
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Branch</div>
-                                                    <div className="font-medium">{projectData.production.branch || 'N/A'}</div>
+                                                    <div className="font-medium">{productionEnv.branch || 'N/A'}</div>
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Build Time</div>
-                                                    <div className="font-medium">{projectData.production.buildTime || 'N/A'}</div>
+                                                    <div className="font-medium">{productionEnv.buildTime || 'N/A'}</div>
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Commit</div>
-                                                    <div className="truncate font-medium">{projectData.production.commitHash || 'N/A'}</div>
+                                                    <div className="truncate font-medium">{productionEnv.commitHash || 'N/A'}</div>
                                                 </div>
                                             </div>
                                         </div>
                                     )}
 
-                                    {projectData.staging.url && (
+                                    {stagingEnv?.url && (
                                         <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
                                             <div className="mb-4 flex items-center justify-between">
                                                 <div className="flex items-center gap-3">
@@ -1096,8 +1410,8 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                                 Ready
                                                             </span>
                                                         </div>
-                                                        <a href={projectData.staging.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
-                                                            {projectData.staging.url}
+                                                        <a href={stagingEnv.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
+                                                            {stagingEnv.url}
                                                             <ExternalLink size={12} />
                                                         </a>
                                                     </div>
@@ -1112,19 +1426,19 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                             <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
                                                 <div>
                                                     <div className="text-zinc-400">Last Deploy</div>
-                                                    <div className="font-medium">{projectData.staging.lastDeployment}</div>
+                                                    <div className="font-medium">{stagingEnv.lastDeployment}</div>
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Branch</div>
-                                                    <div className="font-medium">{projectData.staging.branch || 'N/A'}</div>
+                                                    <div className="font-medium">{stagingEnv.branch || 'N/A'}</div>
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Build Time</div>
-                                                    <div className="font-medium">{projectData.staging.buildTime || 'N/A'}</div>
+                                                    <div className="font-medium">{stagingEnv.buildTime || 'N/A'}</div>
                                                 </div>
                                                 <div>
                                                     <div className="text-zinc-400">Commit</div>
-                                                    <div className="truncate font-medium">{projectData.staging.commitHash || 'N/A'}</div>
+                                                    <div className="truncate font-medium">{stagingEnv.commitHash || 'N/A'}</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -1256,233 +1570,9 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                     </div>
                 )}
 
-                {activeTab === 'monitoring' && (
-                    <div className="space-y-6">
-                        <div>
-                            <h2 className="text-xl font-semibold">Real-time Monitoring</h2>
-                            <p className="text-sm text-zinc-400">Built-in observability with zero setup required</p>
-                        </div>
+                {activeTab === 'monitoring' && <MonitoringDashboard projectData={projectData} alerts={alerts} onResolveAlert={handleResolveAlert} resolvingAlerts={resolvingAlerts} />}
 
-                        {/* Key Metrics Overview */}
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <Activity size={16} />
-                                    Uptime
-                                </div>
-                                <div className="text-2xl font-bold text-green-500">{projectData.metrics.uptime}</div>
-                            </div>
-
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <Zap size={16} />
-                                    Response Time
-                                </div>
-                                <div className="text-2xl font-bold">{projectData.metrics.avgResponseTime}</div>
-                            </div>
-
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <TrendingUp size={16} />
-                                    Requests (24h)
-                                </div>
-                                <div className="text-2xl font-bold">{projectData.metrics.requests24h}</div>
-                            </div>
-
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <AlertCircle size={16} />
-                                    Errors (24h)
-                                </div>
-                                <div className="text-2xl font-bold text-yellow-500">{projectData.metrics.errors24h}</div>
-                            </div>
-                        </div>
-
-                        {/* Environment-Specific Monitoring */}
-                        {projectData.production.url && (
-                            <div className="space-y-6">
-                                <h3 className="text-lg font-semibold">Production Environment</h3>
-
-                                {/* Production Metrics */}
-                                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                        <h4 className="mb-4 font-semibold">Performance Metrics</h4>
-                                        <div className="space-y-4">
-                                            <div>
-                                                <div className="mb-1 flex justify-between text-sm">
-                                                    <span className="text-zinc-400">Requests/min</span>
-                                                    <span className="font-medium">{projectData.production.currentRequestsPerMinute || 0}</span>
-                                                </div>
-                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                                    <div className="h-full bg-blue-500" style={{ width: `${Math.min(((projectData.production.currentRequestsPerMinute || 0) / 100) * 100, 100)}%` }}></div>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <div className="mb-1 flex justify-between text-sm">
-                                                    <span className="text-zinc-400">Response Time</span>
-                                                    <span className="font-medium">{projectData.production.avgResponseTime}</span>
-                                                </div>
-                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                                    <div className="h-full bg-green-500" style={{ width: '85%' }}></div>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <div className="mb-1 flex justify-between text-sm">
-                                                    <span className="text-zinc-400">Error Rate</span>
-                                                    <span className="font-medium">{projectData.production.errorRate}</span>
-                                                </div>
-                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                                    <div className="h-full bg-red-500" style={{ width: '5%' }}></div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                        <h4 className="mb-4 font-semibold">Container Health</h4>
-                                        <div className="space-y-3">
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-zinc-400">Total Containers</span>
-                                                <span className="font-medium">{projectData.production.totalContainers}</span>
-                                            </div>
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-zinc-400">Healthy</span>
-                                                <span className="font-medium text-green-500">{projectData.production.healthyContainers}</span>
-                                            </div>
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-zinc-400">Unhealthy</span>
-                                                <span className="font-medium text-red-500">{projectData.production.unhealthyContainers}</span>
-                                            </div>
-                                            <div className="mt-4">
-                                                <div className="mb-2 text-sm text-zinc-400">Health Status</div>
-                                                <div className="flex items-center gap-2">
-                                                    <div className={`h-3 w-3 rounded-full ${projectData.production.healthyContainers === projectData.production.totalContainers ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
-                                                    <span className="text-sm font-medium">{projectData.production.healthyContainers === projectData.production.totalContainers ? 'All Healthy' : 'Issues Detected'}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Active Alerts */}
-                                {projectData.production.unresolvedAlerts.length > 0 && (
-                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                        <h4 className="mb-4 font-semibold text-red-400">Active Alerts ({projectData.production.unresolvedAlertCount})</h4>
-                                        <div className="space-y-3">
-                                            {projectData.production.unresolvedAlerts.map(alert => (
-                                                <div key={alert.id} className={`rounded-lg border p-3 ${alert.severity === 'critical' ? 'border-red-500/20 bg-red-500/5' : alert.severity === 'high' ? 'border-orange-500/20 bg-orange-500/5' : alert.severity === 'medium' ? 'border-yellow-500/20 bg-yellow-500/5' : 'border-blue-500/20 bg-blue-500/5'}`}>
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="flex items-center gap-3">
-                                                            <AlertCircle className={`${alert.severity === 'critical' ? 'text-red-500' : alert.severity === 'high' ? 'text-orange-500' : alert.severity === 'medium' ? 'text-yellow-500' : 'text-blue-500'}`} size={20} />
-                                                            <div>
-                                                                <div className="text-sm font-medium">{alert.message}</div>
-                                                                <div className="text-xs text-zinc-400">{new Date(alert.timestamp).toLocaleString()}</div>
-                                                            </div>
-                                                        </div>
-                                                        <span className={`rounded-full px-2 py-1 text-xs font-medium ${alert.severity === 'critical' ? 'bg-red-500/10 text-red-500' : alert.severity === 'high' ? 'bg-orange-500/10 text-orange-500' : alert.severity === 'medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-blue-500/10 text-blue-500'}`}>
-                                                            {alert.severity}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* Staging Monitoring (if applicable) */}
-                        {projectData.staging.url && projectData.staging.status === 'active' && (
-                            <div className="space-y-6">
-                                <h3 className="text-lg font-semibold">Staging Environment</h3>
-                                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                        <h4 className="mb-4 font-semibold">Performance Metrics</h4>
-                                        <div className="space-y-4">
-                                            <div>
-                                                <div className="mb-1 flex justify-between text-sm">
-                                                    <span className="text-zinc-400">Requests/min</span>
-                                                    <span className="font-medium">{projectData.staging.currentRequestsPerMinute || 0}</span>
-                                                </div>
-                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                                    <div className="h-full bg-blue-500" style={{ width: `${Math.min(((projectData.staging.currentRequestsPerMinute || 0) / 50) * 100, 100)}%` }}></div>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <div className="mb-1 flex justify-between text-sm">
-                                                    <span className="text-zinc-400">Response Time</span>
-                                                    <span className="font-medium">{projectData.staging.avgResponseTime}</span>
-                                                </div>
-                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                                    <div className="h-full bg-green-500" style={{ width: '90%' }}></div>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <div className="mb-1 flex justify-between text-sm">
-                                                    <span className="text-zinc-400">Error Rate</span>
-                                                    <span className="font-medium">{projectData.staging.errorRate}</span>
-                                                </div>
-                                                <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
-                                                    <div className="h-full bg-red-500" style={{ width: '2%' }}></div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                        <h4 className="mb-4 font-semibold">Container Health</h4>
-                                        <div className="space-y-3">
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-zinc-400">Total Containers</span>
-                                                <span className="font-medium">{projectData.staging.totalContainers}</span>
-                                            </div>
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-zinc-400">Healthy</span>
-                                                <span className="font-medium text-green-500">{projectData.staging.healthyContainers}</span>
-                                            </div>
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-zinc-400">Unhealthy</span>
-                                                <span className="font-medium text-red-500">{projectData.staging.unhealthyContainers}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Logs Section */}
-                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                            <h4 className="mb-4 font-semibold">Recent Application Logs</h4>
-                            <div className="space-y-2 font-mono text-xs">
-                                <div className="flex items-start gap-3 text-zinc-400">
-                                    <span className="text-green-500">[INFO]</span>
-                                    <span className="text-zinc-500">{new Date().toISOString().slice(0, 19).replace('T', ' ')}</span>
-                                    <span>Application started successfully on port 3000</span>
-                                </div>
-                                <div className="flex items-start gap-3 text-zinc-400">
-                                    <span className="text-blue-500">[DEBUG]</span>
-                                    <span className="text-zinc-500">{new Date(Date.now() - 300000).toISOString().slice(0, 19).replace('T', ' ')}</span>
-                                    <span>Database connection pool initialized</span>
-                                </div>
-                                <div className="flex items-start gap-3 text-zinc-400">
-                                    <span className="text-yellow-500">[WARN]</span>
-                                    <span className="text-zinc-500">{new Date(Date.now() - 600000).toISOString().slice(0, 19).replace('T', ' ')}</span>
-                                    <span>High memory usage detected: 85%</span>
-                                </div>
-                                <div className="flex items-start gap-3 text-zinc-400">
-                                    <span className="text-green-500">[INFO]</span>
-                                    <span className="text-zinc-500">{new Date(Date.now() - 900000).toISOString().slice(0, 19).replace('T', ' ')}</span>
-                                    <span>Health check passed for container blue-0</span>
-                                </div>
-                            </div>
-                            <div className="mt-4 flex justify-center">
-                                <button className="text-sm text-blue-400 hover:text-blue-300">View Full Logs →</button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {activeTab === 'settings' && <DeploymentSettings projectId={projectData.id} accessToken={accessToken} />}
+                {activeTab === 'settings' && <DeploymentSettings projectId={projectData.id} accessToken={accessToken} settings={projectData.settings} />}
                 {showBuildLogs && selectedBuild && (
                     <DialogCanvas closeDialog={() => setShowBuildLogs(false)}>
                         <BuildLogsViewer build={selectedBuild} onClose={() => setShowBuildLogs(false)} />

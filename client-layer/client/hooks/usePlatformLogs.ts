@@ -73,7 +73,7 @@ export function usePlatformLogs(options: UsePlatformLogsOptions): UsePlatformLog
       params.append('offset', String(currentOffset));
 
       const response = await axios.get<{ events: LogEvent[]; total: number }>(
-        `${MONITORING_SERVICE_URL}/logging-service/api/platform-logs/query?${params}`
+        `${MONITORING_SERVICE_URL}/api/platform-logs/query?${params}`
       );
 
       const { events, total } = response.data;
@@ -114,7 +114,7 @@ export function usePlatformLogs(options: UsePlatformLogsOptions): UsePlatformLog
       }
 
       const eventSource = new EventSource(
-        `${MONITORING_SERVICE_URL}/logging-service/api/platform-logs/stream/${options.resourceType}/${options.resourceId}`
+        `${MONITORING_SERVICE_URL}/api/platform-logs/stream/${options.resourceType}/${options.resourceId}`
       );
 
       eventSourceRef.current = eventSource;

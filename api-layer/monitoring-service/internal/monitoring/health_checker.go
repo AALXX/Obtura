@@ -24,7 +24,7 @@ func NewHealthChecker(o *Orchestrator) *HealthChecker {
 	}
 }
 
-// CheckAll runs health checks for all active deployments
+// CheckAll runs health checks for all active deployments that have health checks enabled
 func (hc *HealthChecker) CheckAll(ctx context.Context) error {
 	deployments, err := hc.getActiveDeployments(ctx)
 	if err != nil {
@@ -41,6 +41,11 @@ func (hc *HealthChecker) CheckAll(ctx context.Context) error {
 }
 
 func (hc *HealthChecker) checkDeployment(ctx context.Context, deployment *models.Deployment) error {
+	// Skip health checks if not enabled for this project
+	if !deployment.HealthCheckEnabled {
+		return nil
+	}
+
 	// HTTP health check
 	if deployment.HealthCheckEndpoint != "" {
 		if err := hc.performHTTPCheck(ctx, deployment); err != nil {
@@ -88,7 +93,9 @@ func (hc *HealthChecker) performHTTPCheck(ctx context.Context, deployment *model
 func (hc *HealthChecker) performContainerCheck(ctx context.Context, deployment *models.Deployment) error {
 	containerStats, err := hc.orchestrator.dockerClient.GetContainerStats(ctx, deployment.ContainerID)
 	if err != nil {
-		return hc.recordHealthCheck(deployment.ID, "container", "failed", 0, 0, err.Error())
+		hc.recordHealthCheck(deployment.ID, "container", "failed", 0, 0, err.Error())
+		hc.updateContainerHealthStatus(ctx, deployment.ContainerID, "unhealthy")
+		return err
 	}
 
 	status := "healthy"
@@ -96,7 +103,21 @@ func (hc *HealthChecker) performContainerCheck(ctx context.Context, deployment *
 		status = "unhealthy"
 	}
 
-	return hc.recordHealthCheck(deployment.ID, "container", status, 0, 0, "")
+	hc.recordHealthCheck(deployment.ID, "container", status, 0, 0, "")
+	hc.updateContainerHealthStatus(ctx, deployment.ContainerID, status)
+	return nil
+}
+
+func (hc *HealthChecker) updateContainerHealthStatus(ctx context.Context, containerID, healthStatus string) {
+	query := `
+		UPDATE deployment_containers 
+		SET health_status = $1, updated_at = NOW()
+		WHERE container_id = $2
+	`
+	_, err := hc.orchestrator.db.ExecContext(ctx, query, healthStatus, containerID)
+	if err != nil {
+		log.Printf("Failed to update container health status: %v", err)
+	}
 }
 
 func (hc *HealthChecker) performCustomChecks(ctx context.Context, deployment *models.Deployment) error {
@@ -168,7 +189,8 @@ func (hc *HealthChecker) getActiveDeployments(ctx context.Context) ([]*models.De
 		SELECT 
 			d.id, 
 			dc.container_id, 
-			d.health_check_path,
+			ps.health_check_url,
+			ps.perform_health_checks,
 			CASE 
 				WHEN d.database_connections IS NOT NULL 
 					AND jsonb_array_length(d.database_connections) > 0 
@@ -184,7 +206,10 @@ func (hc *HealthChecker) getActiveDeployments(ctx context.Context) ([]*models.De
 			) as has_cache
 		FROM deployments d
 		JOIN deployment_containers dc ON dc.deployment_id = d.id AND dc.is_active = true
+		JOIN projects p ON p.id = d.project_id
+		JOIN project_settings ps ON ps.project_id = p.id
 		WHERE d.status IN ('active', 'running', 'starting', 'healthy')
+			AND ps.perform_health_checks = true
 	`
 
 	rows, err := hc.orchestrator.db.QueryContext(ctx, query)
@@ -196,7 +221,7 @@ func (hc *HealthChecker) getActiveDeployments(ctx context.Context) ([]*models.De
 	var deployments []*models.Deployment
 	for rows.Next() {
 		var d models.Deployment
-		if err := rows.Scan(&d.ID, &d.ContainerID, &d.HealthCheckEndpoint, &d.HasDatabase, &d.HasCache); err != nil {
+		if err := rows.Scan(&d.ID, &d.ContainerID, &d.HealthCheckEndpoint, &d.HealthCheckEnabled, &d.HasDatabase, &d.HasCache); err != nil {
 			return nil, err
 		}
 		deployments = append(deployments, &d)

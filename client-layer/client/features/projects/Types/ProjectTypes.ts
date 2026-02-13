@@ -12,13 +12,16 @@ export interface ProjectData {
     isMonorepo: boolean
     frameworks: FrameworkConfig[] | null
     status: 'active' | 'inactive' | 'paused' | string
+    settings: ProjectSettings
     production: EnvironmentDeployment
     staging: EnvironmentDeployment
     preview: PreviewDeployment[]
     metrics: ProjectMetrics
     gitRepoUrl: string
     builds: BuildData[]
-    deployments: Deployment[] 
+    deployments: Deployment[]
+    alerts?: Alert[]  // Project-level alerts
+    alertCount?: number
 }
 
 export interface BuildData {
@@ -56,6 +59,8 @@ export interface Deployment {
     buildId?: string
     buildStatus?: BuildStatus
     containers?: Container[]
+    unresolvedAlerts?: Alert[]
+    unresolvedAlertCount?: number
 }
 
 export interface FrameworkConfig {
@@ -142,6 +147,8 @@ export interface ProjectMetrics {
     avgResponseTime: string
     requests24h: string
     errors24h: string
+    requestsPerMinute?: number
+    errorRate?: string
 }
 
 export interface ProjectResponse {
@@ -161,6 +168,7 @@ export interface Build {
     branch: string
     commitHash: string
     startTime: string
+    createdAt?: string
     endTime?: string
     duration?: string
     deploymentUrl?: string
@@ -184,3 +192,30 @@ export interface DeploymentConfig {
 export type DeploymentStatus = 'pending' | 'deploying' | 'active' | 'failed' | 'rolled_back' | 'terminated'
 export type DeploymentTrigger = 'manual' | 'auto_push' | 'auto_merge' | 'scheduled' | 'rollback'
 export type DeploymentStrategy = 'blue_green' | 'rolling' | 'canary' | 'recreate'
+
+export interface ProjectSettings {
+    domains: string[]
+    cachingEnabled: boolean
+    cacheTTL: number
+    compressAssets: boolean
+    imageOptimization: boolean
+    cdnEnabled: boolean
+    httpsEnabled: boolean
+    httpsEnforce: boolean
+    httpsCertificateId: string | null
+    rateLimitingEnabled: boolean
+    rateLimitingMaxRequests: number
+    rateLimitingWindowSeconds: number
+    rateLimitingBurstLimit: number
+    rateLimitingBurstPeriodSeconds: number
+    performHealthChecks: boolean
+    healthCheckUrl: string | null
+    buildCacheEnabled: boolean
+    parallelBuilds: boolean
+    buildOptimizationEnabled: boolean
+    failOnWarning: boolean
+}
+
+export interface ProjectDataWithSettings extends ProjectData {
+    settings: ProjectSettings
+}

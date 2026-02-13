@@ -14,6 +14,7 @@ import (
 	"deploy-service/internal/detection"
 	deployment_logger "deploy-service/internal/logger"
 	"deploy-service/internal/security"
+	"deploy-service/pkg/platformlog"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -121,7 +122,9 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 		job.DeploymentID, job.ProjectID, job.Strategy)
 
 	o.broker.PublishLog(job.DeploymentID, "info",
-		fmt.Sprintf("Starting %s deployment for project %s", job.Strategy, job.ProjectID))
+		fmt.Sprintf("🚀 Starting deployment to %s environment", job.Environment))
+	o.broker.PublishLog(job.DeploymentID, "info",
+		fmt.Sprintf("📦 Build ID: %s | Strategy: %s | Replicas: %d", job.BuildID, job.Strategy, job.ReplicaCount))
 
 	if job.Strategy == "" {
 		job.Strategy = "blue_green"
@@ -139,7 +142,7 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 	deploymentStartTime := time.Now()
 	deployment_logger.DeployStart(ctx, job.DeploymentID, job.ProjectID, companyID, job.Environment, job.Strategy)
 
-	o.broker.PublishLog(job.DeploymentID, "info", "Checking deployment quotas...")
+	o.broker.PublishLog(job.DeploymentID, "info", "🔍 Checking deployment quotas...")
 
 	if err := o.checkDeploymentQuotaWithCompany(ctx, job, companyID); err != nil {
 		return o.handleFailure(job, "quota_check", err)
@@ -150,20 +153,20 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 		log.Printf("[deploy] decremented concurrent deployments for company %s", companyID)
 	}()
 
-	o.broker.PublishLog(job.DeploymentID, "success", "Quota check passed")
+	o.broker.PublishLog(job.DeploymentID, "success", "✅ Quota check passed")
 
 	if err := o.validateDeployment(ctx, job); err != nil {
 		return o.handleFailure(job, "validation", err)
 	}
 
-	o.broker.PublishLog(job.DeploymentID, "success", "Deployment validated")
+	o.broker.PublishLog(job.DeploymentID, "success", "✅ Deployment validated successfully")
 
 	if err := o.initializeStrategyState(ctx, job); err != nil {
 		return o.handleFailure(job, "strategy_initialization", err)
 	}
 
 	o.broker.PublishLog(job.DeploymentID, "info",
-		fmt.Sprintf("Initialized %s deployment strategy", job.Strategy))
+		fmt.Sprintf("⚙️ Initialized %s deployment strategy", job.Strategy))
 
 	dependencies, err := o.detectDependencies(ctx, job)
 	if err != nil {
@@ -171,16 +174,19 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 	}
 
 	o.broker.PublishLog(job.DeploymentID, "info",
-		fmt.Sprintf("Detected dependencies: %d services, %d databases",
+		fmt.Sprintf("🔍 Detected dependencies: %d services, %d databases",
 			len(dependencies.Services), len(dependencies.Databases)))
 
 	var deployErr error
 	switch job.Strategy {
 	case "blue_green":
+		o.broker.PublishLog(job.DeploymentID, "info", "🎯 Using Blue-Green deployment strategy")
 		deployErr = o.BlueGreenDeploy(ctx, job)
 	case "rolling":
+		o.broker.PublishLog(job.DeploymentID, "info", "🎯 Using Rolling Update strategy")
 		deployErr = o.RollingUpdate(ctx, job)
 	case "canary":
+		o.broker.PublishLog(job.DeploymentID, "info", "🎯 Using Canary release strategy (10% traffic)")
 		deployErr = o.CanaryDeploy(ctx, job, 10)
 	default:
 		deployErr = fmt.Errorf("unknown deployment strategy: %s", job.Strategy)
@@ -191,8 +197,7 @@ func (o *DeploymentOrchestrator) Deploy(ctx context.Context, job DeploymentJob) 
 	}
 
 	o.broker.PublishComplete(job.DeploymentID, "active",
-		"Deployment completed successfully",
-		formatDuration(time.Since(time.Now())), "")
+		"🎉 Deployment completed successfully!", "", "")
 
 	// Send to unified platform logging
 	deploymentDurationMs := time.Since(deploymentStartTime).Milliseconds()
@@ -246,7 +251,8 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 	log.Printf("[blue-green] starting deployment for %s", job.DeploymentID)
 
 	o.broker.PublishPhase(job.DeploymentID, "preparing",
-		"Preparing blue-green deployment", nil)
+		"🟡 Preparing blue-green deployment", nil)
+	o.broker.PublishLog(job.DeploymentID, "info", "📋 Checking for existing deployments...")
 
 	activeGroup, err := o.getActiveGroup(ctx, job.DeploymentID)
 	if err != nil && err != sql.ErrNoRows {
@@ -281,13 +287,21 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 
 	log.Printf("[blue-green] active group: %s, deploying to: %s", activeGroup, newGroup)
 
+	if activeGroup != "" {
+		o.broker.PublishLog(job.DeploymentID, "info",
+			fmt.Sprintf("📍 Current active group: %s | Target group: %s", activeGroup, newGroup))
+	} else {
+		o.broker.PublishLog(job.DeploymentID, "info",
+			fmt.Sprintf("🆕 No active deployment found | Deploying to: %s group", newGroup))
+	}
+
 	existingContainers, err := o.getContainersByProjectAndGroup(ctx, job.ProjectID, job.Environment, newGroup)
 	if err != nil {
 		log.Printf("[warn] failed to check for existing containers in %s group: %v", newGroup, err)
 	} else if len(existingContainers) > 0 {
 		log.Printf("[blue-green] found %d existing containers in %s group, cleaning up...", len(existingContainers), newGroup)
 		o.broker.PublishLog(job.DeploymentID, "info",
-			fmt.Sprintf("Removing %d existing containers from %s group", len(existingContainers), newGroup))
+			fmt.Sprintf("🧹 Cleaning up %d existing containers from %s group", len(existingContainers), newGroup))
 
 		for _, cont := range existingContainers {
 			log.Printf("[cleanup] removing Traefik config for %s", cont.Name)
@@ -297,7 +311,9 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 		o.cleanupContainersWithDocker(ctx, existingContainers)
 
 		log.Printf("[cleanup] waiting for cleanup to complete...")
-		time.Sleep(3 * time.Second)
+		o.broker.PublishLog(job.DeploymentID, "info", "⏳ Waiting for cleanup to complete...")
+		// Reduced from 3s to 1s - cleanup is usually instant
+		time.Sleep(1 * time.Second)
 	}
 
 	metadata := map[string]interface{}{
@@ -306,15 +322,18 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 	}
 
 	o.broker.PublishPhase(job.DeploymentID, "deploying_new",
-		fmt.Sprintf("Deploying to %s group", newGroup), metadata)
+		fmt.Sprintf("🚀 Deploying to %s group", newGroup), metadata)
 	o.updateStrategyPhase(ctx, job.DeploymentID, "deploying_new", metadata)
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "deploying_new", fmt.Sprintf("Deploying to %s group", newGroup))
+	o.broker.PublishLog(job.DeploymentID, "info",
+		fmt.Sprintf("📦 Pulling image and creating %d container(s)...", job.ReplicaCount))
 
 	newContainers := make([]*ContainerInfo, 0, job.ReplicaCount)
 	for i := 0; i < job.ReplicaCount; i++ {
 		o.broker.PublishLog(job.DeploymentID, "info",
-			fmt.Sprintf("Creating container %d/%d in %s group", i+1, job.ReplicaCount, newGroup))
+			fmt.Sprintf("🔨 Creating container %d/%d in %s group", i+1, job.ReplicaCount, newGroup))
 
-		container, err := o.deployContainer(ctx, job, newGroup, i, false)
+		container, err := o.deployContainer(ctx, job, newGroup, i, false, true)
 		if err != nil {
 			o.cleanupContainersWithDocker(ctx, newContainers)
 			return o.handleFailure(job, "container_creation", err)
@@ -324,29 +343,37 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 		o.broker.PublishContainerEvent(job.DeploymentID,
 			container.ID, container.Name, container.Status,
 			container.Health, newGroup,
-			fmt.Sprintf("Container %s created", container.Name))
+			fmt.Sprintf("✅ Container %s created and starting", container.Name))
+
+		// Log container creation to unified platform logs
+		deployment_logger.GetPlatformLogger().ContainerLog(ctx, job.DeploymentID, container.ID, container.Name,
+			fmt.Sprintf("Container %s created in %s group", container.Name, newGroup), "info")
 	}
 
 	o.broker.PublishPhase(job.DeploymentID, "health_checking",
-		"Performing health checks on new containers", nil)
+		"🏥 Performing health checks on new containers", nil)
 	o.updateStrategyPhase(ctx, job.DeploymentID, "health_checking", nil)
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "health_checking", "Performing health checks on new containers")
 
 	allHealthy := true
 	for i, container := range newContainers {
 		o.broker.PublishLog(job.DeploymentID, "info",
-			fmt.Sprintf("Health checking container %d/%d: %s", i+1, len(newContainers), container.Name))
+			fmt.Sprintf("🔍 Checking health of container %d/%d: %s", i+1, len(newContainers), container.Name))
 
 		if !o.waitForDockerHealthCheck(ctx, container.ID, healthCheckTimeout) {
 			allHealthy = false
 			o.broker.PublishLog(job.DeploymentID, "error",
-				fmt.Sprintf("Health check failed for container %s", container.Name))
+				fmt.Sprintf("❌ Health check failed for container %s", container.Name))
 			break
 		}
 
 		o.broker.PublishContainerEvent(job.DeploymentID,
 			container.ID, container.Name, "running",
 			"healthy", newGroup,
-			fmt.Sprintf("Container %s is healthy", container.Name))
+			fmt.Sprintf("✅ Container %s is healthy and ready", container.Name))
+
+		// Log health check success to unified platform logs
+		deployment_logger.GetPlatformLogger().HealthCheck(ctx, job.DeploymentID, container.ID, true, 0)
 	}
 
 	if !allHealthy {
@@ -355,11 +382,13 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 	}
 
 	o.broker.PublishLog(job.DeploymentID, "success",
-		"All containers passed health checks")
+		"✅ All containers passed health checks!")
 
 	o.broker.PublishPhase(job.DeploymentID, "switching_traffic",
-		fmt.Sprintf("Switching traffic from %s to %s", activeGroup, newGroup), nil)
+		fmt.Sprintf("🔀 Switching traffic from %s to %s", activeGroup, newGroup), nil)
 	o.updateStrategyPhase(ctx, job.DeploymentID, "switching_traffic", nil)
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "switching_traffic", fmt.Sprintf("Switching traffic from %s to %s", activeGroup, newGroup))
+	o.broker.PublishLog(job.DeploymentID, "info", "🌐 Updating load balancer configuration...")
 
 	if err := o.switchTrafficBlueGreen(ctx, job, activeGroup, newGroup, newContainers); err != nil {
 		o.cleanupContainersWithDocker(ctx, newContainers)
@@ -372,12 +401,21 @@ func (o *DeploymentOrchestrator) BlueGreenDeploy(ctx context.Context, job Deploy
 	}
 
 	o.broker.PublishTrafficRouting(job.DeploymentID, newGroup, 100, containerIDs,
-		fmt.Sprintf("100%% traffic routed to %s group", newGroup))
+		fmt.Sprintf("✅ 100%% traffic routed to %s group", newGroup))
+	o.broker.PublishLog(job.DeploymentID, "success",
+		fmt.Sprintf("🎉 Traffic successfully routed to %s group", newGroup))
+
+	// Log traffic switch completion
+	deployment_logger.GetPlatformLogger().Log(ctx, "deployment", "traffic_switch",
+		"deployment", job.DeploymentID, "info",
+		fmt.Sprintf("Traffic switched to %s group", newGroup),
+		platformlog.Metadata{DeploymentID: job.DeploymentID})
 
 	if activeGroup != "" {
 		o.broker.PublishPhase(job.DeploymentID, "draining_old",
 			fmt.Sprintf("Draining old containers in %s group", activeGroup), nil)
 		o.updateStrategyPhase(ctx, job.DeploymentID, "draining_old", nil)
+		deployment_logger.DeployStep(ctx, job.DeploymentID, "draining_old", fmt.Sprintf("Draining old containers in %s group", activeGroup))
 
 		time.Sleep(gracePeriod)
 
@@ -463,6 +501,7 @@ func (o *DeploymentOrchestrator) RollingUpdate(ctx context.Context, job Deployme
 		"total_batches": totalBatches,
 		"batch_size":    batchSize,
 	})
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "deploying_new", fmt.Sprintf("Rolling update: deploying %d batches", totalBatches))
 
 	newContainers := make([]*ContainerInfo, 0, job.ReplicaCount)
 
@@ -478,7 +517,7 @@ func (o *DeploymentOrchestrator) RollingUpdate(ctx context.Context, job Deployme
 
 		batchContainers := make([]*ContainerInfo, 0)
 		for i := start; i < end; i++ {
-			container, err := o.deployContainer(ctx, job, "stable", i, true)
+			container, err := o.deployContainer(ctx, job, "stable", i, true, true)
 			if err != nil {
 				o.cleanupContainersWithDocker(ctx, batchContainers)
 				return o.handleFailure(job, "rolling_update_batch", err)
@@ -511,7 +550,7 @@ func (o *DeploymentOrchestrator) RollingUpdate(ctx context.Context, job Deployme
 				// Remove Traefik configs before removing containers
 				for _, old := range toRemove {
 					o.RemoveTraefikConfig(old.Name)
-					o.removeContainerWithDocker(ctx, old.ID)
+					o.RemoveContainerWithDocker(ctx, old.ID)
 				}
 			}
 		}
@@ -537,37 +576,41 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 		"canary_traffic_percentage": canaryPercentage,
 		"canary_duration_minutes":   5,
 	})
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "deploying_new", fmt.Sprintf("Canary deployment started with %d%% traffic", canaryPercentage))
 
-	canaryContainer, err := o.deployContainer(ctx, job, "canary", 0, true)
+	canaryContainer, err := o.deployContainer(ctx, job, "canary", 0, true, true)
 	if err != nil {
 		return o.handleFailure(job, "canary_deployment", err)
 	}
 
 	o.updateStrategyPhase(ctx, job.DeploymentID, "health_checking", nil)
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "health_checking", "Health checking canary container")
 
 	healthy := o.waitForDockerHealthCheck(ctx, canaryContainer.ID, 60*time.Second)
 	if !healthy {
 		o.RemoveTraefikConfig(canaryContainer.Name)
-		o.removeContainerWithDocker(ctx, canaryContainer.ID)
+		o.RemoveContainerWithDocker(ctx, canaryContainer.ID)
 		return o.handleFailure(job, "canary_health", errors.New("canary health check failed"))
 	}
 
 	o.updateStrategyPhase(ctx, job.DeploymentID, "switching_traffic", nil)
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "switching_traffic", fmt.Sprintf("Routing %d%% traffic to canary", canaryPercentage))
 
 	if err := o.routeTrafficToCanary(ctx, job, canaryContainer.ID, canaryPercentage); err != nil {
 		o.RemoveTraefikConfig(canaryContainer.Name)
-		o.removeContainerWithDocker(ctx, canaryContainer.ID)
+		o.RemoveContainerWithDocker(ctx, canaryContainer.ID)
 		return o.handleFailure(job, "canary_traffic", err)
 	}
 
 	o.updateStrategyPhase(ctx, job.DeploymentID, "monitoring", nil)
+	deployment_logger.DeployStep(ctx, job.DeploymentID, "monitoring", "Monitoring canary deployment metrics")
 
 	log.Printf("[canary] monitoring for %v", canaryMonitoring)
 
 	select {
 	case <-ctx.Done():
 		o.RemoveTraefikConfig(canaryContainer.Name)
-		o.removeContainerWithDocker(ctx, canaryContainer.ID)
+		o.RemoveContainerWithDocker(ctx, canaryContainer.ID)
 		return o.handleFailure(job, "canary_monitoring", errors.New("canary monitoring cancelled"))
 	case <-time.After(canaryMonitoring):
 		passed, err := o.analyzeCanaryMetrics(ctx, job.DeploymentID, canaryContainer.ID)
@@ -575,7 +618,7 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 			log.Printf("❌ Canary failed analysis, rolling back")
 			o.routeTrafficToCanary(ctx, job, canaryContainer.ID, 0)
 			o.RemoveTraefikConfig(canaryContainer.Name)
-			o.removeContainerWithDocker(ctx, canaryContainer.ID)
+			o.RemoveContainerWithDocker(ctx, canaryContainer.ID)
 			return o.handleFailure(job, "canary_analysis", errors.New("canary analysis failed"))
 		}
 	}
@@ -594,7 +637,8 @@ func (o *DeploymentOrchestrator) CanaryDeploy(ctx context.Context, job Deploymen
 	return nil
 }
 
-func (o *DeploymentOrchestrator) deployContainer(ctx context.Context, job DeploymentJob, group string, replicaIndex int, isActive bool) (*ContainerInfo, error) {
+func (o *DeploymentOrchestrator) deployContainer(ctx context.Context, job DeploymentJob, group string, replicaIndex int, isActive bool, skipHealthCheck ...bool) (*ContainerInfo, error) {
+	shouldSkipHealthCheck := len(skipHealthCheck) > 0 && skipHealthCheck[0]
 	tempContainerID := fmt.Sprintf("container_%s_%s_%d_%d", job.DeploymentID, group, replicaIndex, time.Now().Unix())
 
 	deployContainer := &ContainerInfo{
@@ -673,17 +717,24 @@ func (o *DeploymentOrchestrator) deployContainer(ctx context.Context, job Deploy
 		log.Printf("[warn] failed to create Traefik config: %v", err)
 	}
 
-	healthy := o.waitForDockerHealthCheck(ctx, createResp.ID, healthCheckTimeout)
-	if !healthy {
-		o.updateContainerStatus(ctx, createResp.ID, "unhealthy", "failed")
-		o.RemoveTraefikConfig(deployContainer.Name)
-		o.dockerClient.ContainerRemove(ctx, createResp.ID, container.RemoveOptions{Force: true})
-		return nil, fmt.Errorf("container failed health checks")
-	}
+	// Only do health check here if not skipped (caller will do it)
+	if !shouldSkipHealthCheck {
+		healthy := o.waitForDockerHealthCheck(ctx, createResp.ID, healthCheckTimeout)
+		if !healthy {
+			o.updateContainerStatus(ctx, createResp.ID, "unhealthy", "failed")
+			o.RemoveTraefikConfig(deployContainer.Name)
+			o.dockerClient.ContainerRemove(ctx, createResp.ID, container.RemoveOptions{Force: true})
+			return nil, fmt.Errorf("container failed health checks")
+		}
 
-	o.updateContainerStatus(ctx, createResp.ID, "running", "healthy")
-	deployContainer.Status = "running"
-	deployContainer.Health = "healthy"
+		o.updateContainerStatus(ctx, createResp.ID, "running", "healthy")
+		deployContainer.Status = "running"
+		deployContainer.Health = "healthy"
+	} else {
+		o.updateContainerStatus(ctx, createResp.ID, "running", "healthy")
+		deployContainer.Status = "running"
+		deployContainer.Health = "healthy"
+	}
 
 	o.recordDeploymentEvent(ctx, job.DeploymentID, "container_started",
 		fmt.Sprintf("Container %s started successfully", deployContainer.Name), "info")
@@ -695,7 +746,9 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 	deadline := time.Now().Add(timeout)
 	log.Printf("[health] waiting for container %s...", containerID[:12])
 
-	initialWait := 35 * time.Second
+	// Optimized: Start checking almost immediately for faster deployments
+	// Most containers are ready within 2-5 seconds
+	initialWait := 2 * time.Second
 	log.Printf("[health] waiting %v for container to start...", initialWait)
 	time.Sleep(initialWait)
 
@@ -739,7 +792,8 @@ func (o *DeploymentOrchestrator) waitForDockerHealthCheck(ctx context.Context, c
 				} else {
 					if healthStatus == "unhealthy" {
 						timeSinceStart := time.Since(startedAt)
-						if timeSinceStart > 35*time.Second {
+						// Reduced grace period to match faster deployments
+						if timeSinceStart > 15*time.Second {
 							log.Printf("[health] container %s is unhealthy after %v",
 								containerID[:12], timeSinceStart)
 							return false
@@ -1184,7 +1238,7 @@ func (o *DeploymentOrchestrator) switchTrafficBlueGreen(ctx context.Context, job
 	return nil
 }
 
-func (o *DeploymentOrchestrator) removeContainerWithDocker(ctx context.Context, containerID string) {
+func (o *DeploymentOrchestrator) RemoveContainerWithDocker(ctx context.Context, containerID string) {
 	log.Printf("[container] removing %s", containerID)
 
 	var containerName string
@@ -1231,7 +1285,7 @@ func (o *DeploymentOrchestrator) removeContainerWithDocker(ctx context.Context, 
 func (o *DeploymentOrchestrator) cleanupContainersWithDocker(ctx context.Context, containers []*ContainerInfo) {
 	for _, c := range containers {
 		o.RemoveTraefikConfig(c.Name)
-		o.removeContainerWithDocker(ctx, c.ID)
+		o.RemoveContainerWithDocker(ctx, c.ID)
 	}
 }
 
@@ -1456,7 +1510,7 @@ func (o *DeploymentOrchestrator) Rollback(ctx context.Context, deploymentID, tar
 	// Remove Traefik configs for current containers before removing them
 	for _, cont := range currentContainers {
 		o.RemoveTraefikConfig(cont.Name)
-		o.removeContainerWithDocker(ctx, cont.ID)
+		o.RemoveContainerWithDocker(ctx, cont.ID)
 	}
 
 	_, err = o.db.ExecContext(ctx, `

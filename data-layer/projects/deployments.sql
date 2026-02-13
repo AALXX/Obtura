@@ -226,18 +226,29 @@ CREATE INDEX idx_deployment_resources_deployment ON deployment_resources(deploym
 CREATE TABLE deployment_alerts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     deployment_id UUID NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
-    alert_type VARCHAR(50) NOT NULL, -- 'high_error_rate', 'high_response_time', 'health_check_failed', 'memory_limit', 'cpu_threshold'
-    severity VARCHAR(20) NOT NULL, -- 'warning', 'critical'
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE, -- For project-level alerts
+    alert_type VARCHAR(50) NOT NULL, -- 'high_error_rate', 'high_response_time', 'health_check_failed', 'memory_limit', 'cpu_threshold', 'disk_space', 'database_connection', 'ssl_expiry'
+    severity VARCHAR(20) NOT NULL, -- 'low', 'medium', 'high', 'critical'
     alert_message TEXT NOT NULL,
-    alert_data JSONB DEFAULT '{}',
+    alert_data JSONB DEFAULT '{}', -- Additional metadata about the alert
     resolved BOOLEAN DEFAULT false,
     resolved_at TIMESTAMP,
+    resolved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    acknowledged BOOLEAN DEFAULT false, -- User acknowledged but not resolved
+    acknowledged_at TIMESTAMP,
+    acknowledged_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     notified_users JSONB DEFAULT '[]', -- Array of user IDs notified
     created_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE INDEX idx_deployment_alerts_deployment ON deployment_alerts(deployment_id);
+CREATE INDEX idx_deployment_alerts_project ON deployment_alerts(project_id);
 CREATE INDEX idx_deployment_alerts_unresolved ON deployment_alerts(deployment_id, resolved) WHERE resolved = false;
+CREATE INDEX idx_deployment_alerts_project_unresolved ON deployment_alerts(project_id, resolved) WHERE resolved = false;
+CREATE INDEX idx_deployment_alerts_severity ON deployment_alerts(severity);
+CREATE INDEX idx_deployment_alerts_type ON deployment_alerts(alert_type);
+CREATE INDEX idx_deployment_alerts_created_at ON deployment_alerts(created_at DESC);
+
 
 
 CREATE TABLE
@@ -568,3 +579,4 @@ SELECT
     EXTRACT(EPOCH FROM (NOW() - dss.phase_started_at))::INTEGER as phase_duration_seconds
 FROM deployments d
 LEFT JOIN deployment_strategy_state dss ON dss.deployment_id = d.id;
+

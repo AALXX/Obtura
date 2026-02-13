@@ -29,19 +29,6 @@ type Worker struct {
 	orchestrator      *deployment.DeploymentOrchestrator
 }
 
-type DeploymentJob struct {
-	JobID               string                 `json:"job_id"`
-	ProjectID           string                 `json:"project_id"`
-	BuildID             string                 `json:"build_id"`
-	ImageTag            string                 `json:"image_tag"`
-	DeploymentID        string                 `json:"deployment_id"`
-	Environment         string                 `json:"environment"`
-	PreviousContainerID string                 `json:"previous_container_id"`
-	RequiresMigration   bool                   `json:"requires_migration"`
-	Config              map[string]interface{} `json:"config"`
-	CreatedAt           time.Time              `json:"created_at"`
-}
-
 type DeployMessage struct {
 	BuildID      string          `json:"buildId"`
 	DeploymentID string          `json:"deploymentId,omitempty"`
@@ -143,9 +130,35 @@ func (w *Worker) Start() error {
 
 	log.Printf("✅ Deployment queue bound: %s -> obtura.deploys (deploy.triggered)", queue.Name)
 
+	// Create and bind cleanup queue
+	cleanupQueue, err := w.deploymentChannel.QueueDeclare(
+		"project.cleanup.jobs",
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare cleanup queue: %w", err)
+	}
+
+	err = w.deploymentChannel.QueueBind(
+		cleanupQueue.Name,
+		"project.cleanup", // routing key
+		"obtura.deploys",  // exchange
+		false,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to bind cleanup queue: %w", err)
+	}
+
+	log.Printf("✅ Cleanup queue bound: %s -> obtura.deploys (project.cleanup)", cleanupQueue.Name)
+
 	w.deploymentChannel.Qos(1, 0, false)
 
-	// Start consuming
+	// Start consuming deployment messages
 	msgs, err := w.deploymentChannel.Consume(
 		queue.Name,
 		"",    // consumer tag
@@ -156,60 +169,88 @@ func (w *Worker) Start() error {
 		nil,   // args
 	)
 	if err != nil {
-		return fmt.Errorf("failed to register consumer: %w", err)
+		return fmt.Errorf("failed to register deployment consumer: %w", err)
 	}
 
-	log.Println("🚀 Deployment worker started, waiting for deployment messages...")
+	// Start consuming cleanup messages
+	cleanupMsgs, err := w.deploymentChannel.Consume(
+		cleanupQueue.Name,
+		"",    // consumer tag
+		false, // auto-ack
+		false, // exclusive
+		false, // no-local
+		false, // no-wait
+		nil,   // args
+	)
+	if err != nil {
+		return fmt.Errorf("failed to register cleanup consumer: %w", err)
+	}
 
-	for msg := range msgs {
-		log.Printf("📥 Received deployment message: %s", msg.Body)
+	log.Println("🚀 Deployment worker started, waiting for messages...")
 
-		if err := w.handleDeploymentMessage(msg); err != nil {
-			log.Printf("❌ Error processing deployment: %v", err)
+	// Handle deployment messages in a goroutine
+	go func() {
+		for msg := range msgs {
+			log.Printf("📥 Received deployment message: %s", msg.Body)
 
-			// Get retry count from both message headers and database
-			retryCount := w.getRetryCount(msg)
-			
-			// Also check database retry count
-			var deployMsg DeployMessage
-			if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
-				dbRetryCount := w.getDeploymentRetryCount(deployMsg.DeploymentID)
-				if dbRetryCount > retryCount {
-					retryCount = dbRetryCount
-				}
-			}
-			
-			if retryCount >= MaxDeploymentRetries {
-				log.Printf("❌ Max retries (%d) reached for deployment, marking as permanently failed", MaxDeploymentRetries)
-				
-				// Extract deployment ID and mark as failed
+			if err := w.handleDeploymentMessage(msg); err != nil {
+				log.Printf("❌ Error processing deployment: %v", err)
+
+				// Get retry count from both message headers and database
+				retryCount := w.getRetryCount(msg)
+
+				// Also check database retry count
+				var deployMsg DeployMessage
 				if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
-					w.markDeploymentAsPermanentlyFailed(deployMsg.DeploymentID, fmt.Sprintf("Failed after %d retry attempts. Last error: %v", MaxDeploymentRetries, err))
+					dbRetryCount := w.getDeploymentRetryCount(deployMsg.DeploymentID)
+					if dbRetryCount > retryCount {
+						retryCount = dbRetryCount
+					}
 				}
-				
-				// Acknowledge and discard the message
-				msg.Ack(false)
+
+				if retryCount >= MaxDeploymentRetries {
+					log.Printf("❌ Max retries (%d) reached for deployment, marking as permanently failed", MaxDeploymentRetries)
+
+					// Extract deployment ID and mark as failed
+					if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
+						w.markDeploymentAsPermanentlyFailed(deployMsg.DeploymentID, fmt.Sprintf("Failed after %d retry attempts. Last error: %v", MaxDeploymentRetries, err))
+					}
+
+					// Acknowledge and discard the message
+					msg.Ack(false)
+				} else {
+					log.Printf("⚠️ Deployment failed, will retry (attempt %d/%d)", retryCount+1, MaxDeploymentRetries)
+
+					// Track retry in database
+					if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
+						w.incrementDeploymentRetryCount(deployMsg.DeploymentID, err.Error())
+					}
+
+					// Reject and requeue for retry
+					msg.Nack(false, true)
+				}
 			} else {
-				log.Printf("⚠️ Deployment failed, will retry (attempt %d/%d)", retryCount+1, MaxDeploymentRetries)
-				
-				// Track retry in database
-				if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
-					w.incrementDeploymentRetryCount(deployMsg.DeploymentID, err.Error())
-				}
-				
-				// Reject and requeue for retry
-				msg.Nack(false, true)
+				log.Printf("✅ Deployment processed successfully")
+				msg.Ack(false)
 			}
+		}
+	}()
+
+	// Handle cleanup messages
+	for msg := range cleanupMsgs {
+		log.Printf("📥 Received cleanup message: %s", msg.Body)
+
+		if err := w.handleCleanupMessage(msg); err != nil {
+			log.Printf("❌ Error processing cleanup: %v", err)
+			msg.Nack(false, true)
 		} else {
-			log.Printf("✅ Deployment processed successfully")
+			log.Printf("✅ Cleanup processed successfully")
 			msg.Ack(false)
 		}
 	}
 
 	return nil
 }
-
-
 
 // getRetryCount extracts the retry count from message headers
 func (w *Worker) getRetryCount(msg amqp091.Delivery) int {
@@ -460,6 +501,53 @@ func (w *Worker) updateDeploymentError(deploymentID, errorMsg string) {
 	if err != nil {
 		log.Printf("Failed to update deployment error: %v", err)
 	}
+}
+
+type CleanupMessage struct {
+	ProjectID  string `json:"projectId"`
+	Containers []struct {
+		ContainerID   string `json:"containerId"`
+		ContainerName string `json:"containerName"`
+	} `json:"containers"`
+	Timestamp int64 `json:"timestamp"`
+}
+
+func (w *Worker) handleCleanupMessage(msg amqp091.Delivery) error {
+	var cleanupMsg CleanupMessage
+
+	// Parse incoming message
+	if err := json.Unmarshal(msg.Body, &cleanupMsg); err != nil {
+		return fmt.Errorf("failed to parse cleanup message: %w", err)
+	}
+
+	if cleanupMsg.ProjectID == "" {
+		return fmt.Errorf("projectId is required")
+	}
+
+	log.Printf("🧹 Processing cleanup for ProjectID: %s with %d containers", cleanupMsg.ProjectID, len(cleanupMsg.Containers))
+
+	ctx := context.Background()
+
+	// Cleanup each container
+	for _, c := range cleanupMsg.Containers {
+		if c.ContainerID == "" {
+			log.Printf("⚠️ Skipping container with empty ID")
+			continue
+		}
+
+		// Remove Traefik config first
+		if c.ContainerName != "" {
+			log.Printf("🗑️ Removing Traefik config for container: %s", c.ContainerName)
+			w.orchestrator.RemoveTraefikConfig(c.ContainerName)
+		}
+
+		// Stop and remove the container using orchestrator
+		log.Printf("🛑 Stopping and removing container: %s", c.ContainerID[:12])
+		w.orchestrator.RemoveContainerWithDocker(ctx, c.ContainerID)
+	}
+
+	log.Printf("✅ Cleanup completed for ProjectID: %s", cleanupMsg.ProjectID)
+	return nil
 }
 
 func (w *Worker) Close() error {

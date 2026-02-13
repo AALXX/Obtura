@@ -112,6 +112,15 @@ func (am *AlertManager) ProcessAlerts(ctx context.Context) error {
 
 // TriggerAlert manually triggers an alert
 func (am *AlertManager) TriggerAlert(ctx context.Context, alert *models.Alert) error {
+	// First, get the project_id for this deployment
+	var projectID string
+	projectQuery := `SELECT project_id FROM deployments WHERE id = $1`
+	err := am.orchestrator.db.QueryRowContext(ctx, projectQuery, alert.DeploymentID).Scan(&projectID)
+	if err != nil {
+		log.Printf("Warning: Could not get project_id for deployment %s: %v", alert.DeploymentID, err)
+		// Continue without project_id - it will be NULL in the database
+	}
+
 	alertData, err := json.Marshal(map[string]interface{}{
 		"threshold_value": alert.ThresholdValue,
 		"current_value":   alert.CurrentValue,
@@ -123,8 +132,8 @@ func (am *AlertManager) TriggerAlert(ctx context.Context, alert *models.Alert) e
 
 	query := `
 		INSERT INTO deployment_alerts (
-			deployment_id, alert_type, severity, alert_message, alert_data
-		) VALUES ($1, $2, $3, $4, $5)
+			deployment_id, project_id, alert_type, severity, alert_message, alert_data
+		) VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at
 	`
 
@@ -132,6 +141,7 @@ func (am *AlertManager) TriggerAlert(ctx context.Context, alert *models.Alert) e
 		ctx,
 		query,
 		alert.DeploymentID,
+		projectID,
 		alert.MetricType,
 		alert.Severity,
 		alert.Description,
@@ -322,14 +332,14 @@ func (am *AlertManager) getNotificationChannels(alert *models.Alert) []string {
 }
 
 // ResolveAlert marks an alert as resolved
-func (am *AlertManager) ResolveAlert(ctx context.Context, alertID string) error {
+func (am *AlertManager) ResolveAlert(ctx context.Context, alertID string, userID string) error {
 	query := `
 		UPDATE deployment_alerts 
-		SET resolved = true, resolved_at = NOW()
+		SET resolved = true, resolved_at = NOW(), resolved_by_user_id = $2
 		WHERE id = $1
 	`
 
-	_, err := am.orchestrator.db.ExecContext(ctx, query, alertID)
+	_, err := am.orchestrator.db.ExecContext(ctx, query, alertID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve alert: %w", err)
 	}

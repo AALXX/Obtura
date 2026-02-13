@@ -352,26 +352,59 @@ func (s *Server) handleStreamPlatformLogs(c *gin.Context) {
 		return
 	}
 
+	// Check if client supports HTTP/3 - if so, we need special handling
+	// HTTP/3 has issues with SSE streaming, so we force HTTP/2 for this endpoint
+	proto := c.Request.Proto
+	if strings.Contains(c.Request.Header.Get("Alt-Used"), ":443") ||
+		strings.Contains(proto, "HTTP/3") {
+		// Client is trying HTTP/3 - set headers that discourage HTTP/3
+		c.Header("Alt-Svc", "clear")
+	}
+
+	// Set SSE headers - critical for HTTP/2/HTTP/3 compatibility
 	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate, proxy-revalidate")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	c.Header("Access-Control-Expose-Headers", "Content-Type")
+
+	// Add these headers to help with buffering issues
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+
+	// Disable compression for SSE (critical for HTTP/2/HTTP/3)
+	c.Header("Content-Encoding", "identity")
+	c.Header("Transfer-Encoding", "identity")
+
+	// Get the flusher interface for proper streaming
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Streaming not supported"})
+		return
+	}
+
+	// Write status and headers immediately
+	c.Status(http.StatusOK)
+	flusher.Flush()
 
 	// Subscribe to Redis channel for real-time updates
 	channel := fmt.Sprintf("platform:logs:%s:%s", resourceType, resourceID)
 	pubsub := s.orchestrator.GetRedis().Subscribe(c.Request.Context(), channel)
 	defer pubsub.Close()
 
-	// Send initial connection event
-	c.SSEvent("connected", gin.H{
+	// Send initial connection event using manual SSE format for better compatibility
+	fmt.Fprintf(c.Writer, "event: connected\ndata: %s\n\n", mustMarshal(gin.H{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
 		"message":       "Connected to log stream",
-	})
-	c.Writer.Flush()
+	}))
+	flusher.Flush()
 
-	// Set up heartbeat
-	heartbeat := time.NewTicker(15 * time.Second)
+	// Set up shorter heartbeat for HTTP/3 compatibility
+	heartbeat := time.NewTicker(5 * time.Second)
 	defer heartbeat.Stop()
 
 	ch := pubsub.Channel()
@@ -381,19 +414,29 @@ func (s *Server) handleStreamPlatformLogs(c *gin.Context) {
 			return
 
 		case <-heartbeat.C:
-			c.SSEvent("heartbeat", gin.H{"time": time.Now().Unix()})
-			c.Writer.Flush()
+			// Use manual format for heartbeat to ensure proper flushing
+			fmt.Fprintf(c.Writer, "event: heartbeat\ndata: %s\n\n", mustMarshal(gin.H{"time": time.Now().Unix()}))
+			flusher.Flush()
 
 		case msg := <-ch:
 			if msg == nil {
 				return
 			}
 
-			// Send the log event
+			// Send the log event with immediate flush
 			fmt.Fprintf(c.Writer, "event: log\ndata: %s\n\n", msg.Payload)
-			c.Writer.Flush()
+			flusher.Flush()
 		}
 	}
+}
+
+// mustMarshal is a helper to marshal JSON with error handling
+func mustMarshal(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 // handleGetLogStats returns statistics about logs

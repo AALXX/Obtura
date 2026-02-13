@@ -1,6 +1,6 @@
 'use client'
 import React, { useState, useEffect, useRef } from 'react'
-import { X, CheckCircle2, XCircle, Clock, Terminal, Loader2, GitBranch, Package, WifiOff, Wifi } from 'lucide-react'
+import { X, CheckCircle2, XCircle, Clock, Terminal, Loader2, GitBranch, Package, WifiOff, Wifi, AlertCircle, Info } from 'lucide-react'
 
 type BuildStatus = 'queued' | 'cloning' | 'installing' | 'building' | 'completed' | 'failed' | 'timeout' | 'rejected'
 
@@ -124,8 +124,20 @@ const BuildDialog: React.FC<BuildDialogProps> = ({ accessToken, projectId, gitRe
         eventSource.addEventListener('heartbeat', event => {})
 
         eventSource.onerror = error => {
+            // Only show error if we're actually connected and the connection fails
+            // Don't show error for normal connection close when build completes
+            if (eventSource.readyState === EventSource.CLOSED || eventSource.readyState === EventSource.CONNECTING) {
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    console.log('🔌 SSE connection closed (build completed)')
+                }
+                // Only show connection error if we were previously connected
+                if (isConnected && eventSource.readyState === EventSource.CLOSED) {
+                    setIsConnected(false)
+                    setConnectionError('Connection closed')
+                }
+                return
+            }
             console.error('❌ SSE error:', error)
-
             if (isConnected) {
                 setIsConnected(false)
                 setConnectionError('Connection lost')
@@ -173,181 +185,179 @@ const BuildDialog: React.FC<BuildDialogProps> = ({ accessToken, projectId, gitRe
     const isBuilding = !['completed', 'failed', 'timeout', 'rejected'].includes(status)
 
     return (
-        <div className="flex h-full w-full flex-col">
+        <div className="h-full w-full text-white">
             {/* Header */}
-            <div className="border-b border-zinc-800 p-5">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${statusDisplay.bgColor}`}>
-                            <StatusIcon className={`${statusDisplay.color} ${isBuilding ? 'animate-spin' : ''}`} size={24} />
-                        </div>
-                        <div>
-                            <h2 className="text-xl font-semibold text-white">{statusDisplay.text}</h2>
-                            <div className="flex items-center gap-2 text-sm text-zinc-400">
-                                <span>Build time: {formatBuildTime(buildTime)}</span>
-                                <span>•</span>
-                                <span className="font-mono text-xs">{buildId.slice(0, 8)}</span>
+            <div className="flex items-center justify-between border-b border-zinc-800 p-6">
+                <div className="flex items-center gap-3">
+                    <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${statusDisplay.bgColor}`}>
+                        <StatusIcon className={`${statusDisplay.color} ${isBuilding ? 'animate-spin' : ''}`} size={20} />
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-semibold">{statusDisplay.text}</h2>
+                        <p className="text-sm text-zinc-400">
+                            Build time: {formatBuildTime(buildTime)} • {buildId.slice(0, 8)}
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+                <div className="space-y-6">
+                    {/* Connection Status Info */}
+                    {connectionError ? (
+                        <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-4">
+                            <WifiOff className="mt-0.5 flex-shrink-0 text-red-500" size={20} />
+                            <div>
+                                <div className="text-sm font-medium text-red-400">Connection Lost</div>
+                                <p className="mt-1 text-xs text-red-300/80">{connectionError}</p>
                             </div>
                         </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        {/* Connection Status */}
-                        {connectionError ? (
-                            <span className="flex items-center gap-2 text-xs text-red-400">
-                                <WifiOff size={14} />
-                                {connectionError}
-                            </span>
-                        ) : isConnected ? (
-                            <span className="flex items-center gap-2 text-xs text-green-500">
+                    ) : isConnected ? (
+                        <div className="flex items-start gap-3 rounded-lg border border-green-500/20 bg-green-500/5 p-4">
+                            <div className="flex items-center gap-2">
                                 <span className="h-2 w-2 animate-pulse rounded-full bg-green-500"></span>
-                                Live
-                            </span>
-                        ) : (
-                            <span className="flex items-center gap-2 text-xs text-zinc-500">
-                                <Loader2 size={14} className="animate-spin" />
-                                Connecting...
-                            </span>
-                        )}
-
-                        <button onClick={onClose} className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white">
-                            <X size={18} />
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div className="border-b border-zinc-800 bg-zinc-900/50 p-5">
-                <div className="flex items-center justify-between">
-                    {(['cloning', 'installing', 'building'] as const).map((step, idx) => {
-                        const steps: BuildStatus[] = ['queued', 'cloning', 'installing', 'building', 'completed']
-                        const currentStepIndex = steps.indexOf(status)
-                        const stepIndex = steps.indexOf(step)
-
-                        const isErrorState = ['failed', 'timeout', 'rejected'].includes(status)
-
-                        const isComplete = !isErrorState && currentStepIndex > stepIndex
-                        const isCurrent = !isErrorState && currentStepIndex === stepIndex
-
-                        return (
-                            <React.Fragment key={step}>
-                                <div className="flex flex-col items-center gap-2">
-                                    <div
-                                        className={`flex h-10 w-10 items-center justify-center rounded-lg border-2 transition-all duration-300 ${
-                                            isErrorState ? 'border-zinc-700 bg-zinc-900 text-zinc-500' : isComplete ? 'border-green-500 bg-green-500/20 text-green-500' : isCurrent ? 'border-orange-500 bg-orange-500/20 text-orange-500' : 'border-zinc-700 bg-zinc-900 text-zinc-500'
-                                        }`}
-                                    >
-                                        {isErrorState ? idx + 1 : isComplete ? <CheckCircle2 size={18} /> : isCurrent ? <Loader2 size={18} className="animate-spin" /> : idx + 1}
-                                    </div>
-                                    <span className={`text-xs capitalize transition-colors duration-300 ${isCurrent ? 'font-medium text-white' : isComplete ? 'text-zinc-400' : 'text-zinc-500'}`}>{step}</span>
-                                </div>
-                                {idx < 2 && <div className={`h-0.5 flex-1 transition-all duration-500 ${isErrorState ? 'bg-zinc-800' : isComplete ? 'bg-green-500' : 'bg-zinc-800'}`} />}
-                            </React.Fragment>
-                        )
-                    })}
-                </div>
-            </div>
-
-            {/* Success Banner */}
-            {status === 'completed' && (
-                <div className="border-b border-zinc-800 bg-green-500/5 p-4">
-                    <div className="flex items-center gap-3">
-                        <CheckCircle2 className="text-green-500" size={20} />
-                        <div>
-                            <div className="text-sm font-semibold text-green-500">Build Successful!</div>
-                            <div className="text-sm text-zinc-400">Ready for deployment</div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Error Banner */}
-            {(status === 'failed' || status === 'timeout') && (
-                <div className="border-b border-zinc-800 bg-red-500/5 p-4">
-                    <div className="flex items-center gap-3">
-                        <XCircle className="text-red-500" size={20} />
-                        <div>
-                            <div className="text-sm font-semibold text-red-500">{status === 'timeout' ? 'Build Timeout' : 'Build Failed'}</div>
-                            <div className="text-sm text-zinc-400">Check logs below for details</div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Logs Terminal - Flexible to fill remaining space */}
-            <div className="flex-1 overflow-hidden p-5">
-                <div className="mb-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm text-zinc-400">
-                        <Terminal size={16} />
-                        <span className="font-medium">Build Logs</span>
-                        {logs.length > 0 && <span className="text-xs text-zinc-600">({logs.length} entries)</span>}
-                    </div>
-                </div>
-                <div className="h-[calc(100%-2rem)] overflow-y-auto rounded-lg border border-zinc-800 bg-black p-4 font-mono text-xs">
-                    {logs.length === 0 ? (
-                        <div className="flex h-full flex-col items-center justify-center text-zinc-500">
-                            <Loader2 size={24} className="mb-3 animate-spin" />
-                            <p className="flex items-center gap-2">
-                                <Clock size={16} />
-                                Waiting for build logs...
-                            </p>
-                            {!isConnected && <p className="mt-2 text-xs text-zinc-600">Establishing connection to build service...</p>}
+                                <Wifi className="text-green-500" size={20} />
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-green-400">Connected</div>
+                                <p className="mt-1 text-xs text-green-300/80">Receiving live build updates</p>
+                            </div>
                         </div>
                     ) : (
-                        <>
-                            {logs.map((log, idx) => (
-                                <div key={idx} className="mb-1.5 flex gap-3">
-                                    <span className="text-zinc-600">[{log.time}]</span>
-                                    <span className={log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'warn' ? 'text-yellow-400' : 'text-zinc-300'}>{log.message}</span>
-                                </div>
-                            ))}
-                            <div ref={logsEndRef} />
-                            {isBuilding && (
-                                <div className="mt-3 flex items-center gap-2 text-orange-400">
-                                    <div className="h-2 w-2 animate-pulse rounded-full bg-orange-400" />
-                                    <span>Processing...</span>
-                                </div>
-                            )}
-                        </>
+                        <div className="flex items-start gap-3 rounded-lg border border-blue-500/20 bg-blue-500/5 p-4">
+                            <Loader2 className="mt-0.5 flex-shrink-0 animate-spin text-blue-500" size={20} />
+                            <div>
+                                <div className="text-sm font-medium text-blue-400">Connecting...</div>
+                                <p className="mt-1 text-xs text-blue-300/80">Establishing connection to build service</p>
+                            </div>
+                        </div>
                     )}
+
+                    {/* Build Progress Steps */}
+                    <div>
+                        <label className="mb-3 block text-sm font-medium">Build Progress</label>
+                        <div className="flex items-center justify-between">
+                            {(['cloning', 'installing', 'building'] as const).map((step, idx) => {
+                                const steps: BuildStatus[] = ['queued', 'cloning', 'installing', 'building', 'completed']
+                                const currentStepIndex = steps.indexOf(status)
+                                const stepIndex = steps.indexOf(step)
+
+                                const isErrorState = ['failed', 'timeout', 'rejected'].includes(status)
+
+                                const isComplete = !isErrorState && currentStepIndex > stepIndex
+                                const isCurrent = !isErrorState && currentStepIndex === stepIndex
+
+                                return (
+                                    <React.Fragment key={step}>
+                                        <div className="flex flex-col items-center gap-2">
+                                            <div
+                                                className={`flex h-10 w-10 items-center justify-center rounded-lg border-2 transition-all ${
+                                                    isErrorState ? 'border-zinc-700 bg-zinc-900/50 text-zinc-500' : isComplete ? 'border-green-500 bg-green-500/10 text-green-500' : isCurrent ? 'border-orange-500 bg-orange-500/10 text-orange-500' : 'border-zinc-800 bg-zinc-900/50 text-zinc-500'
+                                                }`}
+                                            >
+                                                {isErrorState ? idx + 1 : isComplete ? <CheckCircle2 size={18} /> : isCurrent ? <Loader2 size={18} className="animate-spin" /> : idx + 1}
+                                            </div>
+                                            <span className={`text-xs capitalize ${isCurrent ? 'font-medium text-white' : isComplete ? 'text-zinc-400' : 'text-zinc-500'}`}>{step}</span>
+                                        </div>
+                                        {idx < 2 && <div className={`h-0.5 flex-1 ${isErrorState ? 'bg-zinc-800' : isComplete ? 'bg-green-500' : 'bg-zinc-800'}`} />}
+                                    </React.Fragment>
+                                )
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Success Message */}
+                    {status === 'completed' && (
+                        <div className="flex items-start gap-3 rounded-lg border border-green-500/20 bg-green-500/5 p-4">
+                            <CheckCircle2 className="mt-0.5 flex-shrink-0 text-green-500" size={20} />
+                            <div>
+                                <div className="text-sm font-medium text-green-400">Build Successful!</div>
+                                <p className="mt-1 text-xs text-green-300/80">Your application has been built successfully and is ready for deployment.</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Error Messages */}
+                    {status === 'failed' && (
+                        <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-4">
+                            <XCircle className="mt-0.5 flex-shrink-0 text-red-500" size={20} />
+                            <div>
+                                <div className="text-sm font-medium text-red-400">Build Failed</div>
+                                <p className="mt-1 text-xs text-red-300/80">The build process encountered an error. Check the logs below for details.</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {status === 'timeout' && (
+                        <div className="flex items-start gap-3 rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-4">
+                            <Clock className="mt-0.5 flex-shrink-0 text-yellow-500" size={20} />
+                            <div>
+                                <div className="text-sm font-medium text-yellow-400">Build Timeout</div>
+                                <p className="mt-1 text-xs text-yellow-300/80">The build process exceeded the maximum allowed time.</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {status === 'rejected' && (
+                        <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-4">
+                            <AlertCircle className="mt-0.5 flex-shrink-0 text-red-500" size={20} />
+                            <div>
+                                <div className="text-sm font-medium text-red-400">Build Rejected</div>
+                                <p className="mt-1 text-xs text-red-300/80">Build was rejected due to quota limits being exceeded.</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Build Logs */}
+                    <div>
+                        <div className="mb-2 flex items-center gap-2">
+                            <Terminal size={16} className="text-zinc-400" />
+                            <label className="text-sm font-medium">Build Logs</label>
+                            {logs.length > 0 && <span className="text-xs text-zinc-500">({logs.length} entries)</span>}
+                        </div>
+                        <div className="h-96 overflow-y-auto rounded-lg border border-zinc-800 bg-black p-4 font-mono text-xs">
+                            {logs.length === 0 ? (
+                                <div className="flex h-full flex-col items-center justify-center text-zinc-500">
+                                    <Loader2 size={24} className="mb-3 animate-spin" />
+                                    <p className="flex items-center gap-2">
+                                        <Clock size={16} />
+                                        Waiting for build logs...
+                                    </p>
+                                    {!isConnected && <p className="mt-2 text-xs text-zinc-600">Establishing connection to build service...</p>}
+                                </div>
+                            ) : (
+                                <>
+                                    {logs.map((log, idx) => (
+                                        <div key={idx} className="mb-1.5 flex gap-3">
+                                            <span className="text-zinc-600">[{log.time}]</span>
+                                            <span className={log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'warn' ? 'text-yellow-400' : 'text-zinc-300'}>{log.message}</span>
+                                        </div>
+                                    ))}
+                                    <div ref={logsEndRef} />
+                                    {isBuilding && (
+                                        <div className="mt-3 flex items-center gap-2 text-orange-400">
+                                            <div className="h-2 w-2 animate-pulse rounded-full bg-orange-400" />
+                                            <span>Processing...</span>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            {/* Footer Actions */}
-            <div className="flex items-center justify-between border-t border-zinc-800 bg-zinc-900/50 p-5">
-                <div className="text-sm text-zinc-400">
-                    {status === 'failed' && (
-                        <span className="flex items-center gap-2 text-red-400">
-                            <XCircle size={16} />
-                            Build failed. Check logs for details.
-                        </span>
-                    )}
-                    {status === 'timeout' && (
-                        <span className="flex items-center gap-2 text-yellow-400">
-                            <Clock size={16} />
-                            Build exceeded time limit.
-                        </span>
-                    )}
-                    {status === 'rejected' && (
-                        <span className="flex items-center gap-2 text-red-400">
-                            <XCircle size={16} />
-                            Build was rejected (quota exceeded).
-                        </span>
-                    )}
-                </div>
+            {/* Footer */}
+            <div className="flex items-center justify-between border-t border-zinc-800 p-6">
+                <button onClick={onClose} className="rounded-lg border border-zinc-700 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-900">
+                    {isBuilding ? 'Close and Run in Background' : 'Close'}
+                </button>
                 <div className="flex items-center gap-3">
-                    {isBuilding && (
-                        <button onClick={onClose} className="rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
-                            Close and Run in Background
-                        </button>
-                    )}
                     {status === 'completed' && (
-                        <button onClick={onClose} className="rounded-lg bg-green-500 px-5 py-2 text-sm font-medium text-white hover:bg-green-600">
+                        <button onClick={onClose} className="flex items-center gap-2 rounded-lg bg-green-500 px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-600">
+                            <CheckCircle2 size={18} />
                             Done
-                        </button>
-                    )}
-                    {(status === 'failed' || status === 'timeout' || status === 'rejected') && (
-                        <button onClick={onClose} className="rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
-                            Close
                         </button>
                     )}
                 </div>

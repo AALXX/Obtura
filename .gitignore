@@ -11,3 +11,10 @@ docker-compose.dev.yml
 /cloudflared
 
 /api-layer/core-api/secrets/
+.aider*
+
+/Docs
+
+/api-layer/build-service/tmp/
+/api-layer/deploy-service/tmp/
+/api-layer/monitoring-service/tmp/

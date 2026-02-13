@@ -301,8 +301,12 @@ func formatDuration(d time.Duration) string {
 func (o *DeploymentOrchestrator) handleFailure(job DeploymentJob, phase string, err error) error {
 	log.Printf("❌ Deployment %s failed in phase %s: %v", job.DeploymentID, phase, err)
 
+	// Get company ID for logging
+	companyID, _ := o.getCompanyIDForProject(context.Background(), job.ProjectID)
+
 	// Send to unified platform logging
 	deployment_logger.DeployStep(context.Background(), job.DeploymentID, phase, fmt.Sprintf("Deployment failed: %v", err))
+	deployment_logger.DeployComplete(context.Background(), job.DeploymentID, job.ProjectID, companyID, false, 0)
 
 	o.broker.PublishLog(job.DeploymentID, "error",
 		fmt.Sprintf("Deployment failed in phase %s: %v", phase, err))

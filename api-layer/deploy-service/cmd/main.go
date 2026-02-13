@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"deploy-service/internal/worker"
 	"deploy-service/pkg"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,6 +66,13 @@ func main() {
 		log.Fatalf("Failed to create MinIO storage: %v", err)
 	}
 	log.Println("✅ Successfully connected to MinIO")
+
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		log.Fatalf("Failed to create Docker client: %v", err)
+	}
+	defer dockerClient.Close()
+	log.Println("✅ Successfully connected to Docker")
 
 	rabbitMQURL := pkg.GetEnv("RABBITMQ_URL", "amqp://obtura:obtura123@rabbitmq:5672")
 
@@ -134,6 +144,36 @@ func main() {
 		}
 
 		c.JSON(200, gin.H{"logs": logs})
+	})
+
+	r.POST("/api/deployments/:deploymentId/containers/stop", func(c *gin.Context) {
+		deploymentID := c.Param("deploymentId")
+
+		var req struct {
+			ContainerIDs []string `json:"containerIds"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request body"})
+			return
+		}
+
+		ctx := context.Background()
+		stopTimeout := 10
+
+		for _, containerID := range req.ContainerIDs {
+			err := dockerClient.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &stopTimeout})
+			if err != nil {
+				log.Printf("Warning: failed to stop container %s: %v", containerID, err)
+			}
+
+			err = dockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+			if err != nil {
+				log.Printf("Warning: failed to remove container %s: %v", containerID, err)
+			}
+		}
+
+		log.Printf("Stopped and removed %d containers for deployment %s", len(req.ContainerIDs), deploymentID)
+		c.JSON(200, gin.H{"success": true, "message": "Containers stopped successfully"})
 	})
 
 	w, err := worker.NewWorker(rabbitMQURL, db.DB, quotaService, rateLimiter, minioStorage)

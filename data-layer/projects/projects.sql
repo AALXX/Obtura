@@ -119,3 +119,31 @@ CREATE INDEX idx_audit_logs_created_at ON audit_logs (created_at DESC);
 CREATE INDEX idx_audit_logs_gdpr ON audit_logs (is_gdpr_action)
 WHERE
     is_gdpr_action = true;
+
+CREATE TABLE IF NOT EXISTS project_settings (
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    last_updated_by_user_id TEXT DEFAULT 'SYSTEM',
+    domains JSONB DEFAULT '[]',
+    caching_enabled BOOLEAN DEFAULT false,
+    cache_ttl INTEGER DEFAULT 0,
+    compress_assets BOOLEAN DEFAULT false,
+    image_optimization BOOLEAN DEFAULT false,
+    cdn_enabled BOOLEAN DEFAULT false,
+    https_enabled BOOLEAN DEFAULT false,
+    https_enforce BOOLEAN DEFAULT false,
+    https_certificate_id UUID,
+    rate_limiting_enabled BOOLEAN DEFAULT false,
+    rate_limiting_max_requests INTEGER DEFAULT 0,
+    rate_limiting_window_seconds INTEGER DEFAULT 0,
+    rate_limiting_burst_limit INTEGER DEFAULT 0,
+    rate_limiting_burst_period_seconds INTEGER DEFAULT 0,
+    perform_health_checks BOOLEAN DEFAULT false,
+    health_check_url VARCHAR(255),
+    build_cache_enabled BOOLEAN DEFAULT false,
+    parallel_builds BOOLEAN DEFAULT false,
+    build_optimization_enabled BOOLEAN DEFAULT false,
+    fail_on_warning BOOLEAN DEFAULT false,
+    
+    
+    PRIMARY KEY (project_id)
+)

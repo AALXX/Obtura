@@ -51,16 +51,43 @@ router.post(
 );
 
 router.get('/get-projects/:accessToken', param('accessToken').not().isEmpty(), rbac.authenticate, rbac.loadCompanyEmployee, rbac.requirePermission(PermissionResource.PROJECT, PermissionAction.READ), ProjectsServices.GetProjects);
-router.put('/update-project', body('accessToken').not().isEmpty(), body('projectId').not().isEmpty(), body('projectName').not().isEmpty(), ProjectsServices.RegisterUserWithGoogle);
+router.put(
+    '/update-settings',
+    body('accessToken').not().isEmpty().withMessage('Access token is required'),
+    body('projectId').not().isEmpty().withMessage('Project ID is required'),
+    body('domains').optional(),
+    body('caching').not().isEmpty().withMessage('Caching is required'),
+    body('cacheTTL').optional(),
+    body('compressAssets').not().isEmpty().withMessage('Compress assets is required'),
+    body('cdnEnabled').not().isEmpty().withMessage('CDN is required'),
+    body('httpsEnabled').not().isEmpty().withMessage('HTTPS is required'),
+    body('httpsCertificate').optional(),
+    body('rateLimit').not().isEmpty().withMessage('Rate limit is required'),
+    body('rateLimitMaxRequests').not().isEmpty().withMessage('Rate limit max requests is required'),
+    body('rateLimitWindow').not().isEmpty().withMessage('Rate limit window is required'),
+    body('rateLimitBurst').not().isEmpty().withMessage('Rate limit burst is required'),
+    body('rateLimitBurstPeriod').not().isEmpty().withMessage('Rate limit burst period is required'),
+    body('performHealthChecks').not().isEmpty().withMessage('Perform health checks is required'),
+    body('healthCheckUrl').optional(),
+    body('buildCacheEnabled').not().isEmpty().withMessage('Build cache is required'),
+    body('parallelBuilds').not().isEmpty().withMessage('Parallel builds is required'),
+    body('buildOptimization').not().isEmpty().withMessage('Build optimization is required'),
+    body('failOnWarnings').not().isEmpty().withMessage('Fail on warnings is required'),
+    rbac.authenticate,
+    rbac.loadCompanyEmployee,
+    rbac.requirePermission(PermissionResource.PROJECT, PermissionAction.UPDATE),
+    ProjectsServices.UpdateProjectSettings,
+);
 
-router.delete('/delete-project', body('accessToken').not().isEmpty(), body('projectId').not().isEmpty(), ProjectsServices.RegisterUserWithGoogle);
+router.delete('/delete-project', body('accessToken').not().isEmpty(), body('projectId').not().isEmpty(), rbac.authenticate, rbac.loadCompanyEmployee, rbac.requirePermission(PermissionResource.PROJECT, PermissionAction.DELETE), ProjectsServices.DeleteProject);
 
 router.post('/env-config', upload.single('envFile'), body('projectId').not().isEmpty(), body('envLocation').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.UploadEnvConfig);
 
 router.put('/update-env-config', body('projectId').not().isEmpty(), body('services'), body('accessToken').not().isEmpty(), ProjectsServices.UpdateEnvVariables);
 
-router.post('/trigger-build', body('projectId').not().isEmpty(), body('branch').not(), body('accessToken').not().isEmpty(), ProjectsServices.TriggerBuild);
+router.post('/trigger-build', body('projectId').not().isEmpty(), body('branch').optional(), body('commitHash').optional(), body('accessToken').not().isEmpty(), ProjectsServices.TriggerBuild);
 router.delete('/delete-build/:buildId', body('projectId').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.DeleteBuild);
+router.delete('/delete-deployment/:deploymentId', body('projectId').not().isEmpty(), body('accessToken').not().isEmpty(), ProjectsServices.DeleteDeployment);
 
 router.post(
     '/trigger-deploy',

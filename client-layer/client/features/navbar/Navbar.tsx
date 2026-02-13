@@ -85,7 +85,7 @@ const NavBar = () => {
 
     return (
         <>
-            <nav className="bg-navbar-grey relative flex h-20 w-full items-center border-b border-neutral-800/60 px-8 backdrop-blur-xl">
+            <nav className="bg-navbar-grey relative flex h-20 w-full items-center border-b border-neutral-800/60 px-8 backdrop-blur-xl z-20">
                 <div className="pointer-events-none absolute inset-0 bg-linear-to-r from-neutral-900/50 via-transparent to-neutral-900/50"></div>
 
                 <div className="relative z-10 flex w-full items-center">

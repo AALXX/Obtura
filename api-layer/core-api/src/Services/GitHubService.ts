@@ -156,7 +156,7 @@ const GetUserInstallations = async (req: Request, res: Response) => {
     try {
         const { accessToken } = req.params;
 
-        const companyId = await getCompanyIdFromSessionToken(accessToken);
+        const companyId = await getCompanyIdFromSessionToken(accessToken!);
 
         if (!companyId) {
             return res.status(401).json({
@@ -307,6 +307,49 @@ const GetRepositoryBranches = async (req: Request, res: Response) => {
     }
 };
 
+const GetRepositoryCommits = async (req: Request, res: Response) => {
+    try {
+        const { installationId, owner, repo, branch } = req.params;
+
+        if (!installationId || !owner || !repo || !branch) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required parameters',
+            });
+        }
+
+        const token = await GetInstallationToken(parseInt(installationId));
+
+        const octokit = new Octokit({
+            auth: token,
+        });
+
+        const { data } = await octokit.rest.repos.listCommits({
+            owner,
+            repo,
+            sha: branch,
+            per_page: 50,
+        });
+
+        return res.status(200).json({
+            success: true,
+            commits: data.map(commit => ({
+                sha: commit.sha,
+                message: commit.commit.message,
+                author: commit.commit.author?.name,
+                date: commit.commit.author?.date,
+                url: commit.html_url,
+            })),
+        });
+    } catch (error: any) {
+        console.error('Error fetching commits:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
 const HandleWebhook = async (req: Request, res: Response) => {
     try {
         const signature = req.headers['x-hub-signature-256'];
@@ -441,6 +484,7 @@ export default {
     HandleInstallationCallback,
     GetUserInstallations,
     GetRepositoryBranches,
+    GetRepositoryCommits,
     HandleWebhook,
     GetProjectGitHubToken,
 };

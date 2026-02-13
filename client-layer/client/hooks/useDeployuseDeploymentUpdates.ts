@@ -107,22 +107,56 @@ export function useDeploymentUpdates(projectId: string, initialDeployments: Depl
             eventSource.addEventListener('complete', e => {
                 const data = JSON.parse((e as MessageEvent).data)
                 const newStatus = normalizeStatus(data.status)
+                const now = new Date().toISOString()
+                
+                // Calculate duration if not provided
+                let calculatedDuration = data.duration
+                if (!calculatedDuration) {
+                    const deployment = updatedDeployments.find(d => d.id === data.deploymentId)
+                    if (deployment?.startedAt) {
+                        const start = new Date(deployment.startedAt).getTime()
+                        const end = new Date(now).getTime()
+                        calculatedDuration = Math.round((end - start) / 1000) // in seconds
+                    }
+                }
 
-                console.log(`[deployments] COMPLETE: ${data.deploymentId.substring(0, 8)} → ${newStatus}`)
+                console.log(`[deployments] COMPLETE: ${data.deploymentId.substring(0, 8)} → ${newStatus}, duration: ${calculatedDuration}s`)
 
-                setUpdatedDeployments(prev =>
-                    prev.map(d =>
+                // When a deployment becomes active, mark other active deployments in the same environment as rolled_back
+                const completedDeployment = updatedDeployments.find(d => d.id === data.deploymentId)
+                const targetEnvironment = completedDeployment?.environment
+
+                setUpdatedDeployments(prev => {
+                    // First update the completed deployment
+                    let updated = prev.map(d =>
                         d.id === data.deploymentId
                             ? {
                                   ...d,
                                   status: newStatus,
-                                  duration: data.duration || d.duration,
-                                  completedAt: new Date().toISOString(),
+                                  duration: calculatedDuration ? String(calculatedDuration) : d.duration,
+                                  completedAt: now,
                                   errorMessage: data.errorMessage || d.errorMessage
                               }
                             : d
                     )
-                )
+                    
+                    // If new status is active, mark other active deployments in the same environment as rolled_back
+                    if (newStatus === 'active' && targetEnvironment) {
+                        updated = updated.map(d => {
+                            // Skip the newly completed deployment and only affect same-environment deployments
+                            if (d.id === data.deploymentId) return d
+                            if (d.environment !== targetEnvironment) return d
+                            // Only mark as rolled_back if it's currently active
+                            if (d.status === 'active') {
+                                console.log(`[deployments] Marking previous deployment ${d.id.substring(0, 8)} as rolled_back`)
+                                return { ...d, status: 'rolled_back' as const }
+                            }
+                            return d
+                        })
+                    }
+                    
+                    return updated
+                })
 
                 console.log(`[deployments] Closing connection for ${data.deploymentId.substring(0, 8)}`)
                 eventSource.close()

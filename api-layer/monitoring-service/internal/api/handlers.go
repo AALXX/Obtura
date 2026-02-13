@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"monitoring-service/internal/monitoring"
@@ -46,6 +47,22 @@ func NewServer(cfg *config.Config, orch *monitoring.Orchestrator) *Server {
 	s.setupMiddleware()
 	s.setupRoutes()
 	return s
+}
+
+// getUserIdFromSessionToken retrieves the user ID from a session token
+func (s *Server) getUserIdFromSessionToken(ctx context.Context, sessionToken string) (string, error) {
+	query := `SELECT user_id FROM sessions WHERE access_token = $1`
+
+	var userID string
+	err := s.orchestrator.GetDB().QueryRowContext(ctx, query, sessionToken).Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("invalid session token")
+		}
+		return "", err
+	}
+
+	return userID, nil
 }
 
 func (s *Server) Router() *gin.Engine {
@@ -98,8 +115,8 @@ func (s *Server) setupRoutes() {
 		{
 			alerts.GET("", s.handleGetAlerts)
 			alerts.GET("/:alertId", s.validateAlertID(), s.handleGetAlert)
-			alerts.POST("/:alertId/acknowledge", s.validateAlertID(), s.handleAcknowledgeAlert)
-			alerts.POST("/:alertId/resolve", s.validateAlertID(), s.handleResolveAlert)
+			alerts.POST("/:alertId/acknowledge/:sessionToken", s.validateAlertID(), s.handleAcknowledgeAlert)
+			alerts.POST("/:alertId/resolve/:sessionToken", s.validateAlertID(), s.handleResolveAlert)
 		}
 
 		deployments := api.Group("/deployments")
@@ -523,15 +540,25 @@ func (s *Server) handleGetAlert(c *gin.Context) {
 	c.JSON(http.StatusOK, alert)
 }
 
-// Acknowledge alert
 func (s *Server) handleAcknowledgeAlert(c *gin.Context) {
 	alertID := c.Param("alertId")
+	sessionToken := c.Param("sessionToken")
+
+	logger.Info("Acknowledging alert", zap.String("alert_id", alertID))
+
+	// Get user ID from session token
+	userID, err := s.getUserIdFromSessionToken(c.Request.Context(), sessionToken)
+	if err != nil {
+		logger.Error("Failed to get user ID from session token", zap.Error(err))
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid session token"})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
-	query := `UPDATE alerts SET acknowledged_at = NOW() WHERE id = $1`
-	result, err := s.orchestrator.GetDB().ExecContext(ctx, query, alertID)
+	query := `UPDATE deployment_alerts SET acknowledged = true, acknowledged_at = NOW(), acknowledged_by_user_id = $2 WHERE id = $1`
+	result, err := s.orchestrator.GetDB().ExecContext(ctx, query, alertID, userID)
 	if err != nil {
 		logger.Error("Failed to acknowledge alert", zap.String("alert_id", alertID), logger.Err(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to acknowledge alert"})
@@ -544,19 +571,29 @@ func (s *Server) handleAcknowledgeAlert(c *gin.Context) {
 		return
 	}
 
-	logger.Info("Alert acknowledged", zap.String("alert_id", alertID))
+	logger.Info("Alert acknowledged", zap.String("alert_id", alertID), zap.String("user_id", userID))
 	c.JSON(http.StatusOK, gin.H{"message": "Alert acknowledged"})
 }
 
-// Resolve alert
 func (s *Server) handleResolveAlert(c *gin.Context) {
 	alertID := c.Param("alertId")
+	sessionToken := c.Param("sessionToken")
+
+	logger.Info("Resolving alert", zap.String("alert_id", alertID))
+
+	// Get user ID from session token
+	userID, err := s.getUserIdFromSessionToken(c.Request.Context(), sessionToken)
+	if err != nil {
+		logger.Error("Failed to get user ID from session token", zap.Error(err))
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid session token"})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
-	query := `UPDATE alerts SET status = 'resolved', resolved_at = NOW() WHERE id = $1`
-	result, err := s.orchestrator.GetDB().ExecContext(ctx, query, alertID)
+	query := `UPDATE deployment_alerts SET resolved = true, resolved_at = NOW(), resolved_by_user_id = $2 WHERE id = $1`
+	result, err := s.orchestrator.GetDB().ExecContext(ctx, query, alertID, userID)
 	if err != nil {
 		logger.Error("Failed to resolve alert", zap.String("alert_id", alertID), logger.Err(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve alert"})
@@ -569,7 +606,7 @@ func (s *Server) handleResolveAlert(c *gin.Context) {
 		return
 	}
 
-	logger.Info("Alert resolved", zap.String("alert_id", alertID))
+	logger.Info("Alert resolved", zap.String("alert_id", alertID), zap.String("user_id", userID))
 	c.JSON(http.StatusOK, gin.H{"message": "Alert resolved"})
 }
 
@@ -862,7 +899,13 @@ func (s *Server) corsMiddleware() gin.HandlerFunc {
 
 func (s *Server) timeoutMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Set a default timeout of 30 seconds for all requests
+		// Skip timeout for SSE endpoints - they need to be long-lived
+		if strings.Contains(c.Request.URL.Path, "/stream/") {
+			c.Next()
+			return
+		}
+
+		// Set a default timeout of 30 seconds for all other requests
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
 

@@ -111,12 +111,13 @@ export function useBuildUpdates(projectId: string, initialBuilds: Build[]) {
             })
 
             eventSource.onerror = error => {
-                console.error(`SSE ERROR for build ${build.id.substring(0, 8)}`, 'ReadyState:', eventSource.readyState)
-
-                if (eventSource.readyState === EventSource.CLOSED) {
-                    console.log(`Connection closed for ${build.id.substring(0, 8)}`)
+                // Don't treat connection close as an error - it happens when build completes
+                if (eventSource.readyState === EventSource.CLOSED || eventSource.readyState === EventSource.CONNECTING) {
+                    console.log(`Connection ${eventSource.readyState === EventSource.CLOSED ? 'closed' : 'connecting'} for ${build.id.substring(0, 8)}`)
                     eventSourcesRef.current.delete(build.id)
+                    return
                 }
+                console.error(`SSE ERROR for build ${build.id.substring(0, 8)}`, 'ReadyState:', eventSource.readyState)
             }
 
             eventSourcesRef.current.set(build.id, eventSource)

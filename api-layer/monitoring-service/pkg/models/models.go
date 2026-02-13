@@ -11,6 +11,7 @@ type Deployment struct {
 	Status              string
 	ContainerStatus     string
 	HealthCheckEndpoint string
+	HealthCheckEnabled  bool
 	HasDatabase         bool
 	HasCache            bool
 	CreatedAt           time.Time

@@ -1,42 +1,160 @@
 import React, { useState, useEffect } from 'react'
-import { Rocket, X, GitBranch, Package, Settings, AlertCircle, CheckCircle2, Loader2, Info, Zap, Shield } from 'lucide-react'
+import { Rocket, X, GitBranch, GitCommit, Package, Settings, AlertCircle, CheckCircle2, Loader2, Info, Zap, Shield, Clock } from 'lucide-react'
+import axios from 'axios'
 import { DeploymentConfig } from '../Types/ProjectTypes'
+
+const formatTimeAgo = (dateString: string): string => {
+    if (!dateString) return 'N/A'
+    const date = new Date(dateString)
+    if (isNaN(date.getTime())) return 'N/A'
+    const now = new Date()
+    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
+    
+    if (seconds < 60) return 'just now'
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h ago`
+    const days = Math.floor(hours / 24)
+    return `${days}d ago`
+}
+
+interface Commit {
+    sha: string
+    message: string
+    author: string
+    date: string
+    url: string
+}
+
+interface Branch {
+    name: string
+    commit: {
+        sha: string
+    }
+    protected: boolean
+}
 
 interface DeployDialogProps {
     accessToken: string
     projectId: string
+    gitRepoUrl: string
     builds: Array<{
         id: string
         commitHash: string
         branch: string
         status: string
-        buildTime: string | null
-        createdAt: string
+        duration?: string
+        createdAt?: string
     }>
     currentBranch: string
     deploymentStrategy: string
     onDeploy: (config: DeploymentConfig) => void
     onClose: () => void
 }
-const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, builds, currentBranch, deploymentStrategy, onDeploy, onClose }) => {
+const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, gitRepoUrl, builds, currentBranch, deploymentStrategy, onDeploy, onClose }) => {
     const [environment, setEnvironment] = useState<'production' | 'staging'>('production')
     const [source, setSource] = useState<'build' | 'branch'>('build')
     const [selectedBuild, setSelectedBuild] = useState('')
     const [selectedBranch, setSelectedBranch] = useState(currentBranch || 'main')
+    const [selectedCommit, setSelectedCommit] = useState('')
+    const [branches, setBranches] = useState<Branch[]>([])
+    const [commits, setCommits] = useState<Commit[]>([])
+    const [isLoadingBranches, setIsLoadingBranches] = useState(true)
+    const [isLoadingCommits, setIsLoadingCommits] = useState(false)
     const [showAdvanced, setShowAdvanced] = useState(false)
     const [strategy, setStrategy] = useState(deploymentStrategy || 'blue_green')
     const [enableMonitoring, setEnableMonitoring] = useState(true)
     const [autoScaling, setAutoScaling] = useState(false)
     const [isDeploying, setIsDeploying] = useState(false)
 
-    // Filter successful builds
-    const successfulBuilds = builds.filter(b => b.status === 'completed' || b.status === 'success')
+    const extractRepoInfo = (url: string) => {
+        const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/)
+        if (match) {
+            return { owner: match[1], repo: match[2].replace('.git', '') }
+        }
+        return null
+    }
+
+    const repoInfo = extractRepoInfo(gitRepoUrl)
 
     useEffect(() => {
-        if (successfulBuilds.length > 0 && !selectedBuild) {
-            setSelectedBuild(successfulBuilds[0].id)
+        const fetchBranches = async () => {
+            if (!repoInfo) return
+            
+            try {
+                const installationResp = await axios.get<{ installations: Array<{ installation_id: number }> }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/installations/${accessToken}`)
+                const installations = installationResp.data.installations
+                
+                if (!installations || installations.length === 0) {
+                    setIsLoadingBranches(false)
+                    return
+                }
+
+                const installation = installations[0]
+                const resp = await axios.get<{ success: boolean; branches: Branch[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/repository-branches/${accessToken}/${repoInfo.repo}/${repoInfo.owner}/${installation.installation_id}`)
+                
+                if (resp.data.success) {
+                    setBranches(resp.data.branches)
+                    if (resp.data.branches.length > 0) {
+                        const defaultBranch = resp.data.branches.find((b: Branch) => b.name === currentBranch) || resp.data.branches[0]
+                        setSelectedBranch(defaultBranch.name)
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching branches:', error)
+            } finally {
+                setIsLoadingBranches(false)
+            }
         }
-    }, [successfulBuilds])
+
+        fetchBranches()
+    }, [gitRepoUrl, accessToken])
+
+    useEffect(() => {
+        const fetchCommits = async () => {
+            if (!repoInfo || !selectedBranch) return
+            
+            setIsLoadingCommits(true)
+            try {
+                const installationResp = await axios.get<{ installations: Array<{ installation_id: number }> }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/installations/${accessToken}`)
+                const installations = installationResp.data.installations
+                
+                if (!installations || installations.length === 0) {
+                    setIsLoadingCommits(false)
+                    return
+                }
+
+                const installation = installations[0]
+                const resp = await axios.get<{ success: boolean; commits: Commit[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/repository-commits/${accessToken}/${repoInfo.repo}/${repoInfo.owner}/${installation.installation_id}/${selectedBranch}`)
+                
+                if (resp.data.success) {
+                    setCommits(resp.data.commits)
+                    if (resp.data.commits.length > 0 && !selectedCommit) {
+                        setSelectedCommit(resp.data.commits[0].sha)
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching commits:', error)
+            } finally {
+                setIsLoadingCommits(false)
+            }
+        }
+
+        fetchCommits()
+    }, [selectedBranch, gitRepoUrl, accessToken])
+
+    const successfulBuilds = builds.filter(b => b.status === 'completed' || b.status === 'success')
+
+    const sortedBuilds = [...successfulBuilds].sort((a, b) => {
+        return (b.createdAt || '').localeCompare(a.createdAt || '')
+    })
+
+    useEffect(() => {
+        if (sortedBuilds.length > 0 && !selectedBuild) {
+            setSelectedBuild(sortedBuilds[0].id)
+        }
+    }, [sortedBuilds, selectedBuild])
 
     const handleDeploy = () => {
         setIsDeploying(true)
@@ -44,7 +162,7 @@ const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, bui
         const config: DeploymentConfig = {
             environment,
             source,
-            ...(source === 'build' ? { buildId: selectedBuild } : { branch: selectedBranch }),
+            ...(source === 'build' ? { buildId: selectedBuild } : { branch: selectedBranch, commitHash: selectedCommit }),
             strategy: showAdvanced ? strategy : deploymentStrategy,
             enableMonitoring,
             autoScaling
@@ -66,7 +184,7 @@ const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, bui
         }
     }
 
-    const isValid = source === 'build' ? selectedBuild : selectedBranch
+    const isValid = source === 'build' ? selectedBuild : (selectedBranch && selectedCommit)
 
     return (
         <div className="h-full w-full text-white">
@@ -131,30 +249,33 @@ const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, bui
                         <div>
                             <label className="mb-2 block text-sm font-medium">Select Build</label>
                             <select value={selectedBuild} onChange={e => setSelectedBuild(e.target.value)} className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-white focus:border-orange-500 focus:outline-none">
-                                {successfulBuilds.length === 0 ? (
+                                {sortedBuilds.length === 0 ? (
                                     <option value="">No successful builds available</option>
                                 ) : (
-                                    successfulBuilds.map(build => (
+                                    sortedBuilds.map(build => (
                                         <option key={build.id} value={build.id}>
                                             #{build.id.substring(0, 8)} - {build.branch} ({build.commitHash.substring(0, 7)}) - {build.createdAt}
                                         </option>
                                     ))
                                 )}
                             </select>
-                            {successfulBuilds.length > 0 && selectedBuild && (
+                            {sortedBuilds.length > 0 && selectedBuild && (
                                 <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
                                     <div className="grid grid-cols-3 gap-3 text-sm">
                                         <div>
-                                            <div className="text-zinc-400">Build Time</div>
-                                            <div className="font-medium">{successfulBuilds.find(b => b.id === selectedBuild)?.buildTime || 'N/A'}</div>
+                                            <div className="text-zinc-400">Built</div>
+                                            <div className="flex items-center gap-1.5 font-medium">
+                                                <Clock size={14} className="text-zinc-500" />
+                                                                                                {sortedBuilds.find(b => b.id === selectedBuild)?.createdAt}
+                                            </div>
                                         </div>
                                         <div>
                                             <div className="text-zinc-400">Branch</div>
-                                            <div className="font-medium">{successfulBuilds.find(b => b.id === selectedBuild)?.branch}</div>
+                                            <div className="font-medium">{sortedBuilds.find(b => b.id === selectedBuild)?.branch}</div>
                                         </div>
                                         <div>
                                             <div className="text-zinc-400">Commit</div>
-                                            <div className="font-mono text-xs font-medium">{successfulBuilds.find(b => b.id === selectedBuild)?.commitHash.substring(0, 7)}</div>
+                                            <div className="font-mono text-xs font-medium">{sortedBuilds.find(b => b.id === selectedBuild)?.commitHash.substring(0, 7)}</div>
                                         </div>
                                     </div>
                                 </div>
@@ -165,11 +286,57 @@ const DeployDialog: React.FC<DeployDialogProps> = ({ accessToken, projectId, bui
                     {/* Branch Selection */}
                     {source === 'branch' && (
                         <div>
-                            <label className="mb-2 block text-sm font-medium">Branch Name</label>
-                            <input type="text" value={selectedBranch} onChange={e => setSelectedBranch(e.target.value)} placeholder="main, develop, feature/..." className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-white placeholder-zinc-500 focus:border-orange-500 focus:outline-none" />
-                            <div className="mt-2 flex items-start gap-2 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+                            <label className="mb-2 block text-sm font-medium">Branch</label>
+                            {isLoadingBranches ? (
+                                <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-zinc-400">
+                                    <Loader2 size={18} className="animate-spin" />
+                                    Loading branches...
+                                </div>
+                            ) : branches.length === 0 ? (
+                                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-zinc-400">
+                                    No branches found
+                                </div>
+                            ) : (
+                                <select 
+                                    value={selectedBranch} 
+                                    onChange={e => setSelectedBranch(e.target.value)}
+                                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-white focus:border-orange-500 focus:outline-none"
+                                >
+                                    {branches.map(branch => (
+                                        <option key={branch.name} value={branch.name}>
+                                            {branch.name} ({branch.commit.sha.substring(0, 7)})
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
+                            
+                            <label className="mb-2 mt-4 block text-sm font-medium">Commit</label>
+                            {isLoadingCommits ? (
+                                <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-zinc-400">
+                                    <Loader2 size={18} className="animate-spin" />
+                                    Loading commits...
+                                </div>
+                            ) : commits.length === 0 ? (
+                                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-zinc-400">
+                                    No commits found
+                                </div>
+                            ) : (
+                                <select 
+                                    value={selectedCommit} 
+                                    onChange={e => setSelectedCommit(e.target.value)}
+                                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-white focus:border-orange-500 focus:outline-none"
+                                >
+                                    {commits.map(commit => (
+                                        <option key={commit.sha} value={commit.sha}>
+                                            {commit.sha.substring(0, 7)} - {commit.message.substring(0, 50)}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
+                            
+                            <div className="mt-3 flex items-start gap-2 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
                                 <Info className="mt-0.5 flex-shrink-0 text-blue-400" size={16} />
-                                <p className="text-xs text-blue-300">This will trigger a new build from the latest commit on the selected branch before deploying.</p>
+                                <p className="text-xs text-blue-300">This will trigger a new build from the selected commit before deploying.</p>
                             </div>
                         </div>
                     )}

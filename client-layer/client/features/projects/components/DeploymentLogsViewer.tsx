@@ -8,6 +8,17 @@ type DeploymentPhase = 'preparing' | 'deploying_new' | 'health_checking' | 'swit
 type BuildStatus = 'queued' | 'cloning' | 'installing' | 'building' | 'completed' | 'failed' | 'timeout'
 type BuildPhase = 'queued' | 'cloning' | 'installing' | 'building' | 'completed' | 'failed'
 
+const formatLogTime = (timestamp: string | number | undefined): string => {
+    if (!timestamp) {
+        return new Date().toLocaleTimeString('en-US', { hour12: false })
+    }
+    const date = new Date(timestamp)
+    if (isNaN(date.getTime())) {
+        return new Date().toLocaleTimeString('en-US', { hour12: false })
+    }
+    return date.toLocaleTimeString('en-US', { hour12: false })
+}
+
 interface ContainerInfo {
     id: string
     name: string
@@ -26,6 +37,7 @@ interface DeploymentLogsViewerProps {
     containers?: ContainerInfo[]
     onClose: () => void
     mode?: 'deploying' | 'history'
+    isBuildAndDeploy?: boolean
 }
 
 interface LogEntry {
@@ -60,27 +72,18 @@ interface TrafficRouting {
 
 interface PlatformLogEvent {
     id: string
-    eventType: string
-    eventSubtype: string
+    event_type: string
+    event_subtype: string
     severity: 'debug' | 'info' | 'warning' | 'error' | 'fatal'
     message: string
-    eventTimestamp: string
-    sourceService: string
+    event_timestamp: string
+    source_service: string
     metadata?: Record<string, any>
 }
 
 const MONITORING_SERVICE_URL = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost/monitoring-service'
 
-const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({ 
-    deploymentId, 
-    projectId, 
-    environment, 
-    strategy, 
-    buildId,
-    containers: initialContainers = [],
-    onClose,
-    mode = 'deploying'
-}) => {
+const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({ deploymentId, projectId, environment, strategy, buildId, containers: initialContainers = [], onClose, mode = 'deploying', isBuildAndDeploy = false }) => {
     const [liveLogs, setLiveLogs] = useState<LogEntry[]>([])
     const [historicalLogs, setHistoricalLogs] = useState<LogEntry[]>([])
     const [currentPhase, setCurrentPhase] = useState<DeploymentPhase>('preparing')
@@ -110,11 +113,11 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
     const [isLoading, setIsLoading] = useState(false)
     const [isLoadingHistorical, setIsLoadingHistorical] = useState(false)
     const [activeTab, setActiveTab] = useState<'live' | 'all'>('live')
-    const [hasBuildPhase, setHasBuildPhase] = useState(!!buildId)
+    const [hasBuildPhase, setHasBuildPhase] = useState(isBuildAndDeploy)
     const [buildCompleted, setBuildCompleted] = useState(false)
     const [buildError, setBuildError] = useState<string>('')
     const [hasLoadedHistoricalLogs, setHasLoadedHistoricalLogs] = useState(false)
-    
+
     // Container logs state
     const [containerLogs, setContainerLogs] = useState<LogEntry[]>([])
     const [selectedContainerId, setSelectedContainerId] = useState<string | null>(null)
@@ -132,7 +135,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
     useEffect(() => {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [historicalLogs, containerLogs])
-    
+
     useEffect(() => {
         liveLogsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [liveLogs])
@@ -171,12 +174,10 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
         // Fetch build logs from unified API if we have a buildId
         if (buildId) {
             try {
-                const buildResp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(
-                    `${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=build&resource_id=${buildId}&limit=1000`
-                )
+                const buildResp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(`${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=build&resource_id=${buildId}&limit=1000`)
                 if (buildResp.status === 200 && buildResp.data.events && buildResp.data.events.length > 0) {
                     const buildLogs = buildResp.data.events.map((event: PlatformLogEvent) => ({
-                        time: new Date(event.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
+                        time: formatLogTime(event.event_timestamp),
                         message: event.message,
                         type: getLogType(event.severity),
                         source: 'build' as const
@@ -190,7 +191,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                     const buildResp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${buildId}/logs`)
                     if (buildResp.status === 200 && buildResp.data.logs && buildResp.data.logs.length > 0) {
                         const buildLogs = buildResp.data.logs.map((log: any) => ({
-                            time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
+                            time: formatLogTime(log.created_at),
                             message: log.message,
                             type: log.log_type as 'info' | 'success' | 'error' | 'warning',
                             source: 'build' as const
@@ -205,12 +206,10 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
 
         // Fetch deployment logs from unified API
         try {
-            const deployResp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(
-                `${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=deployment&resource_id=${deploymentId}&limit=1000`
-            )
+            const deployResp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(`${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=deployment&resource_id=${deploymentId}&limit=1000`)
             if (deployResp.status === 200 && deployResp.data.events && deployResp.data.events.length > 0) {
                 const deployLogs = deployResp.data.events.map((event: PlatformLogEvent) => ({
-                    time: new Date(event.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
+                    time: formatLogTime(event.event_timestamp),
                     message: event.message,
                     type: getLogType(event.severity),
                     source: 'deployment' as const
@@ -224,7 +223,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                 const deployResp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL}/deployments/${deploymentId}/logs`)
                 if (deployResp.status === 200 && deployResp.data.logs && deployResp.data.logs.length > 0) {
                     const deployLogs = deployResp.data.logs.map((log: any) => ({
-                        time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
+                        time: formatLogTime(log.created_at),
                         message: log.message,
                         type: log.log_type as 'info' | 'success' | 'error' | 'warning',
                         source: 'deployment' as const
@@ -242,15 +241,15 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
             const timeB = new Date(`1970-01-01T${b.time}`).getTime()
             return timeA - timeB
         })
-        
+
         setHistoricalLogs(allLogs)
         setHasLoadedHistoricalLogs(true)
         setIsLoadingHistorical(false)
     }
 
-    // Load historical logs on mount for history mode
+    // Load historical logs on mount
     useEffect(() => {
-        if (!isDeployingMode && !hasLoadedHistoricalLogs) {
+        if (!hasLoadedHistoricalLogs) {
             fetchHistoricalLogs()
         }
     }, [isDeployingMode])
@@ -265,8 +264,8 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
 
         setContainerLogs([])
         setSelectedContainerId(containerId)
-        
-        const deployServiceUrl = process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL 
+
+        const deployServiceUrl = process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL
         const eventSource = new EventSource(`${deployServiceUrl}/deployments/${deploymentId}/containers/${containerId}/logs/stream`)
         containerEventSourceRef.current = eventSource
 
@@ -284,14 +283,17 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
         eventSource.addEventListener('log', event => {
             try {
                 const data = JSON.parse((event as MessageEvent).data)
-                const time = new Date(data.timestamp || Date.now()).toLocaleTimeString('en-US', { hour12: false })
+                const time = formatLogTime(data.timestamp || Date.now())
 
-                setContainerLogs(prev => [...prev, {
-                    time,
-                    message: data.log,
-                    type: (data.type || 'info') as 'info' | 'success' | 'error' | 'warning',
-                    source: 'container'
-                }])
+                setContainerLogs(prev => [
+                    ...prev,
+                    {
+                        time,
+                        message: data.log,
+                        type: (data.type || 'info') as 'info' | 'success' | 'error' | 'warning',
+                        source: 'container'
+                    }
+                ])
             } catch (error) {
                 console.error('Error parsing container log event:', error)
             }
@@ -317,7 +319,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
             }
         }
     }, [])
-    
+
     // Disconnect from container logs when switching away from live tab
     useEffect(() => {
         if (!isDeployingMode && activeTab !== 'live') {
@@ -331,36 +333,47 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
 
     // Connect to build service SSE if we have a buildId and in deploying mode
     useEffect(() => {
-        if (!buildId || !isDeployingMode) return
+        if (!buildId || !isDeployingMode || !hasBuildPhase) return
+
+        // Track connection state to suppress initial HTTP/3 errors
+        let isConnectionOpen = false
+        let errorCount = 0
 
         const connectToBuildSSE = () => {
             // Try unified API first, fallback to old API on error
-            const unifiedEventSource = new EventSource(
-                `${MONITORING_SERVICE_URL}/api/platform-logs/stream/build/${buildId}`
-            )
+            const unifiedEventSource = new EventSource(`${MONITORING_SERVICE_URL}/api/platform-logs/stream/build/${buildId}`)
             buildEventSourceRef.current = unifiedEventSource
 
             unifiedEventSource.onopen = () => {
+                isConnectionOpen = true
+                errorCount = 0
                 setIsBuildConnected(true)
             }
+
+            unifiedEventSource.addEventListener('connected', event => {
+                setIsBuildConnected(true)
+            })
 
             unifiedEventSource.addEventListener('log', event => {
                 try {
                     const data: PlatformLogEvent = JSON.parse((event as MessageEvent).data)
-                    const time = new Date(data.eventTimestamp).toLocaleTimeString('en-US', { hour12: false })
+                    const time = formatLogTime(data.event_timestamp)
 
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: data.message,
-                        type: getLogType(data.severity),
-                        source: 'build'
-                    }])
+                    setLiveLogs(prev => [
+                        ...prev,
+                        {
+                            time,
+                            message: data.message,
+                            type: getLogType(data.severity),
+                            source: 'build'
+                        }
+                    ])
 
                     // Update build phase based on event subtype
-                    if (data.eventSubtype === 'build_start' || data.eventSubtype === 'build_step') {
+                    if (data.event_subtype === 'build_start' || data.event_subtype === 'build_step') {
                         setBuildPhase(data.metadata?.stepName || 'building')
                     }
-                    if (data.eventSubtype === 'build_complete') {
+                    if (data.event_subtype === 'build_complete') {
                         setBuildStatus(data.severity === 'error' ? 'failed' : 'completed')
                         setBuildPhase(data.severity === 'error' ? 'failed' : 'completed')
                         setBuildCompleted(true)
@@ -374,82 +387,21 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
             })
 
             unifiedEventSource.onerror = error => {
-                console.error('Unified build SSE error, falling back to legacy API:', error)
-                unifiedEventSource.close()
+                errorCount++
                 
-                // Fallback to old build service API
-                const buildServiceUrl = process.env.NEXT_PUBLIC_BUILD_SERVICE_URL 
-                const eventSource = new EventSource(`${buildServiceUrl}/builds/${buildId}/logs/stream`)
-                buildEventSourceRef.current = eventSource
-
-                eventSource.onopen = () => {
-                    setIsBuildConnected(true)
+                // Suppress all errors until connection is established
+                // Chrome tries HTTP/3 first which fails, then falls back to HTTP/2
+                if (!isConnectionOpen) {
+                    // Silently ignore errors during initial connection
+                    return
                 }
-
-                eventSource.addEventListener('log', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: data.message,
-                            type: data.type as 'info' | 'success' | 'error' | 'warning',
-                            source: 'build'
-                        }])
-                    } catch (error) {
-                        console.error('Error parsing build log event:', error)
-                    }
-                })
-
-                eventSource.addEventListener('status', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        setBuildStatus(data.status)
-                        setBuildPhase(data.status)
-
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: `Phase: ${data.status} - ${data.message}`,
-                            type: 'info',
-                            source: 'build'
-                        }])
-                    } catch (error) {
-                        console.error('Error parsing build status event:', error)
-                    }
-                })
-
-                eventSource.addEventListener('complete', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        setBuildStatus(data.status)
-                        setBuildPhase(data.status)
-                        setBuildCompleted(true)
-
-                        if (data.status === 'failed') {
-                            setBuildError(data.errorMessage || 'Build failed')
-                        }
-
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: data.status === 'completed' ? '✓ Build completed successfully' : '✗ Build failed',
-                            type: data.status === 'completed' ? 'success' : 'error',
-                            source: 'build'
-                        }])
-
-                        eventSource.close()
-                    } catch (error) {
-                        console.error('Error parsing build completion event:', error)
-                    }
-                })
-
-                eventSource.onerror = error => {
-                    console.error('Build SSE error:', error)
-                    if (isBuildConnected) {
-                        setIsBuildConnected(false)
-                    }
+                
+                // After connection is open, only log real errors
+                if (unifiedEventSource.readyState === EventSource.CLOSED) {
+                    console.log('Build SSE connection closed')
+                } else if (unifiedEventSource.readyState === EventSource.OPEN) {
+                    console.error('Build SSE error while connected:', error)
+                    setIsBuildConnected(false)
                 }
             }
         }
@@ -462,7 +414,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                 buildEventSourceRef.current = null
             }
         }
-    }, [buildId, isDeployingMode])
+    }, [buildId, isDeployingMode, hasBuildPhase])
 
     // Connect to deployment service SSE (only in deploying mode)
     useEffect(() => {
@@ -471,53 +423,75 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
         const shouldConnect = ['pending', 'deploying'].includes(status)
 
         if (shouldConnect) {
-            // Try unified API first
-            const unifiedEventSource = new EventSource(
-                `${MONITORING_SERVICE_URL}/api/platform-logs/stream/deployment/${deploymentId}`
-            )
+            // Track connection state to suppress initial HTTP/3 errors
+            let isConnectionOpen = false
+
+            const unifiedEventSource = new EventSource(`${MONITORING_SERVICE_URL}/api/platform-logs/stream/deployment/${deploymentId}`)
             deployEventSourceRef.current = unifiedEventSource
 
             unifiedEventSource.onopen = () => {
+                isConnectionOpen = true
                 setIsConnected(true)
             }
 
             unifiedEventSource.addEventListener('connected', event => {
+                console.log('✅ Unified deployment SSE connected')
                 setIsConnected(true)
             })
 
+            // Catch-all listener for all events
+            unifiedEventSource.addEventListener('message', event => {
+                console.log('📨 Received message event:', event.data)
+            })
+
             unifiedEventSource.addEventListener('log', event => {
+                console.log('📝 Received log event:', event)
                 try {
                     const data: PlatformLogEvent = JSON.parse((event as MessageEvent).data)
-                    const time = new Date(data.eventTimestamp).toLocaleTimeString('en-US', { hour12: false })
+                    console.log('📝 Parsed log data:', data)
+                    console.log('🔍 Event subtype:', data.event_subtype, 'Severity:', data.severity)
+                    const time = formatLogTime(data.event_timestamp)
 
-                    setLiveLogs(prev => [...prev, {
-                        time,
-                        message: data.message,
-                        type: getLogType(data.severity),
-                        source: 'deployment'
-                    }])
+                    setLiveLogs(prev => [
+                        ...prev,
+                        {
+                            time,
+                            message: data.message,
+                            type: getLogType(data.severity),
+                            source: 'deployment'
+                        }
+                    ])
 
                     // Update deployment phase based on event subtype
-                    if (data.eventSubtype === 'deploy_start') {
+                    if (data.event_subtype === 'deploy_start') {
+                        console.log('🚀 Setting phase to deploying_new')
                         setCurrentPhase('deploying_new')
-                    } else if (data.eventSubtype === 'health_check') {
+                    } else if (data.event_subtype === 'health_check') {
+                        console.log('🏥 Setting phase to health_checking')
                         setCurrentPhase('health_checking')
-                    } else if (data.eventSubtype === 'traffic_switch') {
+                    } else if (data.event_subtype === 'traffic_switch') {
+                        console.log('🚦 Setting phase to switching_traffic')
                         setCurrentPhase('switching_traffic')
-                    } else if (data.eventSubtype === 'deploy_complete') {
+                    } else if (data.event_subtype === 'deploy_complete') {
+                        console.log('✅ Deploy complete event received, severity:', data.severity)
                         if (data.severity === 'error') {
+                            console.log('❌ Setting status to failed')
                             setStatus('failed')
                             setCurrentPhase('failed')
                         } else {
+                            console.log('✅ Setting status to active and phase to completed')
                             setStatus('active')
                             setCurrentPhase('completed')
                         }
+                        // Close connection after processing completion
+                        console.log('🔌 Closing SSE connection after deploy_complete')
+                        unifiedEventSource.close()
                     }
 
                     // Handle metadata for container and traffic info
                     if (data.metadata) {
                         setPhaseMetadata(data.metadata)
-                        
+
                         if (data.metadata.containerId) {
                             setContainers(prev => {
                                 const updated = new Map(prev)
@@ -538,135 +512,19 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
             })
 
             unifiedEventSource.onerror = error => {
-                console.error('Unified deployment SSE error, falling back to legacy API:', error)
-                unifiedEventSource.close()
-                
-                // Fallback to old deployment service API
-                const deployServiceUrl = process.env.NEXT_PUBLIC_DEPLOY_SERVICE_URL 
-                const eventSource = new EventSource(`${deployServiceUrl}/deployments/${deploymentId}/logs/stream`)
-                deployEventSourceRef.current = eventSource
-
-                eventSource.onopen = () => {
-                    setIsConnected(true)
+                // Suppress all errors until connection is established
+                // Chrome tries HTTP/3 first which fails, then falls back to HTTP/2
+                if (!isConnectionOpen) {
+                    // Silently ignore errors during initial connection
+                    return
                 }
-
-                eventSource.addEventListener('connected', event => {
-                    setIsConnected(true)
-                })
-
-                eventSource.addEventListener('log', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: data.message,
-                            type: data.type as 'info' | 'success' | 'error' | 'warning',
-                            source: 'deployment'
-                        }])
-                    } catch (error) {
-                        console.error('Error parsing log event:', error)
-                    }
-                })
-
-                eventSource.addEventListener('phase', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        setCurrentPhase(data.phase)
-                        if (data.metadata) {
-                            setPhaseMetadata(data.metadata)
-                        }
-
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: `📍 ${data.message}`,
-                            type: 'info',
-                            source: 'deployment'
-                        }])
-                    } catch (error) {
-                        console.error('Error parsing phase event:', error)
-                    }
-                })
-
-                eventSource.addEventListener('container', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        setContainers(prev => {
-                            const updated = new Map(prev)
-                            updated.set(data.containerId, data)
-                            return updated
-                        })
-
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: `🐳 ${data.message}`,
-                            type: data.health === 'healthy' ? 'success' : data.health === 'unhealthy' ? 'error' : 'info',
-                            source: 'deployment'
-                        }])
-                    } catch (error) {
-                        console.error('Error parsing container event:', error)
-                    }
-                })
-
-                eventSource.addEventListener('traffic', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        setTrafficInfo(data)
-
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: `🚦 ${data.message}`,
-                            type: 'info',
-                            source: 'deployment'
-                        }])
-                    } catch (error) {
-                        console.error('Error parsing traffic event:', error)
-                    }
-                })
-
-                eventSource.addEventListener('complete', event => {
-                    try {
-                        const data = JSON.parse((event as MessageEvent).data)
-                        const newStatus = data.status as DeploymentStatus
-                        setStatus(newStatus)
-                        
-                        if (newStatus === 'active') {
-                            setCurrentPhase('completed')
-                        } else if (newStatus === 'failed') {
-                            setCurrentPhase('failed')
-                        }
-
-                        if (data.errorMessage) {
-                            setErrorMessage(data.errorMessage)
-                        }
-
-                        const time = new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: false })
-                        setLiveLogs(prev => [...prev, {
-                            time,
-                            message: data.message,
-                            type: data.status === 'active' ? 'success' : 'error',
-                            source: 'deployment'
-                        }])
-
-                        eventSource.close()
-                    } catch (error) {
-                        console.error('Error parsing completion event:', error)
-                    }
-                })
-
-                eventSource.addEventListener('heartbeat', () => {
-                    // Keep connection alive
-                })
-
-                eventSource.onerror = error => {
-                    console.error('Deployment SSE error:', error)
-                    if (isConnected) {
-                        setIsConnected(false)
-                    }
+                
+                // After connection is open, only log real errors
+                if (unifiedEventSource.readyState === EventSource.CLOSED) {
+                    console.log('Deployment SSE connection closed')
+                } else if (unifiedEventSource.readyState === EventSource.OPEN) {
+                    console.error('Deployment SSE error while connected:', error)
+                    setIsConnected(false)
                 }
             }
         }
@@ -677,7 +535,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                 deployEventSourceRef.current = null
             }
         }
-    }, [deploymentId, status, isDeployingMode])
+    }, [deploymentId, isDeployingMode])
 
     const formatDeploymentTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60)
@@ -770,7 +628,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
     }
 
     const availableContainers = Array.from(containers.values())
-    
+
     // Auto-select first container when containers become available in history mode
     useEffect(() => {
         if (!isDeployingMode && activeTab === 'live' && availableContainers.length > 0 && !selectedContainerId) {
@@ -779,23 +637,15 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
     }, [availableContainers, isDeployingMode, activeTab, selectedContainerId])
 
     return (
-        <div className="flex h-full w-full flex-col bg-[#0f0f0f]">
+        <div className="flex h-full w-full flex-col">
             {/* Header - Enterprise Style */}
-            <div className="border-b border-zinc-800 bg-[#1a1a1a] p-6">
+            <div className="border-b border-zinc-800 p-6">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                        <div className={`flex h-14 w-14 items-center justify-center rounded-xl bg-zinc-900 border border-zinc-800`}>
-                            {isDeployingMode ? (
-                                <PhaseIcon className={`${phaseDisplay.color} ${isDeploying ? 'animate-spin' : ''}`} size={28} />
-                            ) : (
-                                <FileText className="text-zinc-400" size={28} />
-                            )}
-                        </div>
+                        <div className={`flex h-14 w-14 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900`}>{isDeployingMode ? <PhaseIcon className={`${phaseDisplay.color} ${isDeploying ? 'animate-spin' : ''}`} size={28} /> : <FileText className="text-zinc-400" size={28} />}</div>
                         <div>
-                            <div className="flex items-center gap-3 mb-1">
-                                <h2 className="text-xl font-semibold text-white">
-                                    {isDeployingMode ? phaseDisplay.text : 'Deployment Logs'}
-                                </h2>
+                            <div className="mb-1 flex items-center gap-3">
+                                <h2 className="text-xl font-semibold text-white">{isDeployingMode ? phaseDisplay.text : 'Deployment Logs'}</h2>
                                 {getModeBadge()}
                                 {getStatusBadge()}
                             </div>
@@ -822,11 +672,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                                     <>
                                         <span className="text-zinc-700">|</span>
                                         <span className="flex items-center gap-1.5">
-                                            {buildCompleted ? (
-                                                <CheckCircle2 size={14} className="text-green-500" />
-                                            ) : (
-                                                <Loader2 size={14} className="animate-spin text-blue-500" />
-                                            )}
+                                            {buildCompleted ? <CheckCircle2 size={14} className="text-green-500" /> : <Loader2 size={14} className="animate-spin text-blue-500" />}
                                             Build {buildCompleted ? 'Complete' : 'In Progress'}
                                         </span>
                                     </>
@@ -852,7 +698,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
 
             {/* Build Phase Progress - Only show in Deploying Mode */}
             {isDeployingMode && hasBuildPhase && isDeploying && !buildCompleted && (
-                <div className="border-b border-zinc-800 bg-zinc-900/30 p-6">
+                <div className="border-b border-zinc-800 p-6">
                     <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-zinc-300">
                         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10">
                             <Hammer size={16} className="text-blue-500" />
@@ -874,24 +720,14 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                                     <div className="flex flex-col items-center gap-2">
                                         <div
                                             className={`flex h-12 w-12 items-center justify-center rounded-xl border-2 transition-all duration-300 ${
-                                                isFailed 
-                                                    ? 'border-red-500/50 bg-red-500/10 text-red-500' 
-                                                    : isComplete 
-                                                        ? 'border-green-500/50 bg-green-500/10 text-green-500' 
-                                                        : isCurrent 
-                                                            ? 'border-blue-500/50 bg-blue-500/10 text-blue-500 shadow-lg shadow-blue-500/20' 
-                                                            : 'border-zinc-800 bg-zinc-900 text-zinc-600'
+                                                isFailed ? 'border-red-500/50 bg-red-500/10 text-red-500' : isComplete ? 'border-green-500/50 bg-green-500/10 text-green-500' : isCurrent ? 'border-blue-500/50 bg-blue-500/10 text-blue-500 shadow-lg shadow-blue-500/20' : 'border-zinc-800 bg-zinc-900 text-zinc-600'
                                             }`}
                                         >
                                             {isFailed ? <XCircle size={20} /> : isComplete ? <CheckCircle2 size={20} /> : isCurrent ? <Loader2 size={20} className="animate-spin" /> : idx + 1}
                                         </div>
-                                        <span className={`text-xs capitalize ${isCurrent ? 'font-medium text-zinc-300' : 'text-zinc-600'}`}>
-                                            {phase.replace(/_/g, ' ')}
-                                        </span>
+                                        <span className={`text-xs capitalize ${isCurrent ? 'font-medium text-zinc-300' : 'text-zinc-600'}`}>{phase.replace(/_/g, ' ')}</span>
                                     </div>
-                                    {idx < 3 && (
-                                        <div className={`h-0.5 flex-1 mx-2 ${isComplete ? 'bg-green-500/50' : 'bg-zinc-800'}`} />
-                                    )}
+                                    {idx < 3 && <div className={`mx-2 h-0.5 flex-1 ${isComplete ? 'bg-green-500/50' : 'bg-zinc-800'}`} />}
                                 </React.Fragment>
                             )
                         })}
@@ -901,7 +737,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
 
             {/* Deployment Phase Progress - Only show in Deploying Mode */}
             {isDeployingMode && isDeploying && strategy === 'blue_green' && buildCompleted && (
-                <div className="border-b border-zinc-800 bg-zinc-900/30 p-6">
+                <div className="border-b border-zinc-800 p-6">
                     <div className="flex items-center justify-between px-4">
                         {(['deploying_new', 'health_checking', 'switching_traffic'] as const).map((phase, idx) => {
                             const phases: DeploymentPhase[] = ['preparing', 'deploying_new', 'health_checking', 'switching_traffic', 'completed']
@@ -917,24 +753,14 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                                     <div className="flex flex-col items-center gap-2">
                                         <div
                                             className={`flex h-12 w-12 items-center justify-center rounded-xl border-2 transition-all duration-300 ${
-                                                isFailed 
-                                                    ? 'border-red-500/50 bg-red-500/10 text-red-500' 
-                                                    : isComplete 
-                                                        ? 'border-green-500/50 bg-green-500/10 text-green-500' 
-                                                        : isCurrent 
-                                                            ? 'border-orange-500/50 bg-orange-500/10 text-orange-500 shadow-lg shadow-orange-500/20' 
-                                                            : 'border-zinc-800 bg-zinc-900 text-zinc-600'
+                                                isFailed ? 'border-red-500/50 bg-red-500/10 text-red-500' : isComplete ? 'border-green-500/50 bg-green-500/10 text-green-500' : isCurrent ? 'border-orange-500/50 bg-orange-500/10 text-orange-500 shadow-lg shadow-orange-500/20' : 'border-zinc-800 bg-zinc-900 text-zinc-600'
                                             }`}
                                         >
                                             {isFailed ? <XCircle size={20} /> : isComplete ? <CheckCircle2 size={20} /> : isCurrent ? <Loader2 size={20} className="animate-spin" /> : idx + 1}
                                         </div>
-                                        <span className={`text-xs capitalize ${isCurrent ? 'font-medium text-zinc-300' : 'text-zinc-600'}`}>
-                                            {phase.replace(/_/g, ' ')}
-                                        </span>
+                                        <span className={`text-xs capitalize ${isCurrent ? 'font-medium text-zinc-300' : 'text-zinc-600'}`}>{phase.replace(/_/g, ' ')}</span>
                                     </div>
-                                    {idx < 2 && (
-                                        <div className={`h-0.5 flex-1 mx-2 ${isComplete ? 'bg-green-500/50' : 'bg-zinc-800'}`} />
-                                    )}
+                                    {idx < 2 && <div className={`mx-2 h-0.5 flex-1 ${isComplete ? 'bg-green-500/50' : 'bg-zinc-800'}`} />}
                                 </React.Fragment>
                             )
                         })}
@@ -955,7 +781,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                                 <div>
                                     <div className="text-sm font-semibold text-red-500">Build Failed</div>
                                     {buildError && <div className="text-sm text-zinc-400">{buildError}</div>}
-                                    <div className="text-xs text-zinc-500 mt-1">Deployment cannot proceed until the build is fixed.</div>
+                                    <div className="mt-1 text-xs text-zinc-500">Deployment cannot proceed until the build is fixed.</div>
                                 </div>
                             </div>
                         </div>
@@ -993,7 +819,7 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
 
                     {/* Active Containers Info */}
                     {containers.size > 0 && (
-                        <div className="border-b border-zinc-800 bg-zinc-900/30 p-4">
+                        <div className="border-b border-zinc-800 p-4">
                             <div className="mb-3 text-sm font-semibold text-zinc-300">Active Containers ({containers.size})</div>
                             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                                 {Array.from(containers.values()).map(container => (
@@ -1031,27 +857,13 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
 
             {/* Tab Navigation - Only in History Mode */}
             {!isDeployingMode && (
-                <div className="border-b border-zinc-800 bg-zinc-900/50 px-6">
+                <div className="border-b border-zinc-800 px-6">
                     <div className="flex gap-1">
-                        <button 
-                            onClick={() => setActiveTab('live')} 
-                            className={`flex items-center gap-2 border-b-2 px-5 py-4 text-sm font-medium transition-all ${
-                                activeTab === 'live' 
-                                    ? 'border-orange-500 text-white' 
-                                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                            }`}
-                        >
+                        <button onClick={() => setActiveTab('live')} className={`flex items-center gap-2 border-b-2 px-5 py-4 text-sm font-medium transition-all ${activeTab === 'live' ? 'border-orange-500 text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>
                             <Radio size={16} className={activeTab === 'live' ? 'text-orange-500' : ''} />
                             Live Container Logs
                         </button>
-                        <button 
-                            onClick={() => setActiveTab('all')} 
-                            className={`flex items-center gap-2 border-b-2 px-5 py-4 text-sm font-medium transition-all ${
-                                activeTab === 'all' 
-                                    ? 'border-orange-500 text-white' 
-                                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                            }`}
-                        >
+                        <button onClick={() => setActiveTab('all')} className={`flex items-center gap-2 border-b-2 px-5 py-4 text-sm font-medium transition-all ${activeTab === 'all' ? 'border-orange-500 text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>
                             <FileText size={16} className={activeTab === 'all' ? 'text-orange-500' : ''} />
                             All Deployment Logs
                         </button>
@@ -1063,76 +875,54 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
             <div className="flex-1 overflow-hidden p-6">
                 <div className="mb-4 flex items-center justify-between">
                     <div className="flex items-center gap-3 text-sm text-zinc-400">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-900 border border-zinc-800">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900">
                             <Terminal size={16} />
                         </div>
-                        <span className="font-medium text-zinc-300">
-                            {isDeployingMode 
-                                ? (hasBuildPhase ? 'Build & Deployment Logs' : 'Deployment Logs')
-                                : activeTab === 'live' 
-                                    ? 'Live Container Logs' 
-                                    : 'All Deployment Logs'
-                            }
-                        </span>
+                        <span className="font-medium text-zinc-300">{isDeployingMode ? (hasBuildPhase ? 'Build & Deployment Logs' : 'Deployment Logs') : activeTab === 'live' ? 'Live Container Logs' : 'All Deployment Logs'}</span>
                         {isDeployingMode && hasBuildPhase && (
-                            <span className="text-xs text-zinc-600 bg-zinc-900 px-2 py-1 rounded border border-zinc-800">
+                            <span className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-xs text-zinc-600">
                                 <span className="text-blue-400">Build</span>
-                                <span className="text-zinc-600 mx-1">+</span>
+                                <span className="mx-1 text-zinc-600">+</span>
                                 <span className="text-purple-400">Deploy</span>
                             </span>
                         )}
                         {!isDeployingMode && hasBuildPhase && activeTab === 'all' && (
-                            <span className="text-xs text-zinc-600 bg-zinc-900 px-2 py-1 rounded border border-zinc-800">
+                            <span className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-xs text-zinc-600">
                                 <span className="text-blue-400">Build</span>
-                                <span className="text-zinc-600 mx-1">+</span>
+                                <span className="mx-1 text-zinc-600">+</span>
                                 <span className="text-purple-400">Deploy</span>
                             </span>
                         )}
                         {isDeployingMode && isDeploying && (
-                            <span className="flex items-center gap-2 text-xs text-orange-400 bg-orange-500/10 px-3 py-1 rounded-full">
+                            <span className="flex items-center gap-2 rounded-full bg-orange-500/10 px-3 py-1 text-xs text-orange-400">
                                 <div className="h-2 w-2 animate-pulse rounded-full bg-orange-400" />
                                 Streaming...
                             </span>
                         )}
                         {!isDeployingMode && activeTab === 'live' && isContainerConnected && (
-                            <span className="flex items-center gap-2 text-xs text-green-400 bg-green-500/10 px-3 py-1 rounded-full">
+                            <span className="flex items-center gap-2 rounded-full bg-green-500/10 px-3 py-1 text-xs text-green-400">
                                 <div className="h-2 w-2 animate-pulse rounded-full bg-green-400" />
                                 Connected
                             </span>
                         )}
                     </div>
-                    <div className="text-xs text-zinc-600">
-                        {isDeployingMode 
-                            ? `${liveLogs.length} entries` 
-                            : activeTab === 'all' 
-                                ? `${historicalLogs.length} entries` 
-                                : `${containerLogs.length} entries`
-                        }
-                    </div>
+                    <div className="text-xs text-zinc-600">{isDeployingMode ? `${liveLogs.length} entries` : activeTab === 'all' ? `${historicalLogs.length} entries` : `${containerLogs.length} entries`}</div>
                 </div>
-                
+
                 {/* Container Selector - Only in Live Logs Tab */}
                 {!isDeployingMode && activeTab === 'live' && availableContainers.length > 0 && (
                     <div className="mb-4 flex items-center gap-3">
                         <span className="text-sm text-zinc-500">Container:</span>
-                        <div className="flex gap-2 flex-wrap">
+                        <div className="flex flex-wrap gap-2">
                             {availableContainers.map(container => (
                                 <button
                                     key={container.containerId}
                                     onClick={() => connectToContainerLogs(container.containerId)}
-                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                                        selectedContainerId === container.containerId
-                                            ? 'bg-orange-500/10 text-orange-400 border border-orange-500/30'
-                                            : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:bg-zinc-800 hover:text-zinc-300'
-                                    }`}
+                                    className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${selectedContainerId === container.containerId ? 'border border-orange-500/30 bg-orange-500/10 text-orange-400' : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300'}`}
                                 >
                                     <Box size={12} />
                                     <span className="font-mono">{container.containerName}</span>
-                                    <div className={`h-2 w-2 rounded-full ${
-                                        container.health === 'healthy' ? 'bg-green-500' : 
-                                        container.health === 'unhealthy' ? 'bg-red-500' : 
-                                        'bg-yellow-500'
-                                    }`} />
+                                    <div className={`h-2 w-2 rounded-full ${container.health === 'healthy' ? 'bg-green-500' : container.health === 'unhealthy' ? 'bg-red-500' : 'bg-yellow-500'}`} />
                                 </button>
                             ))}
                         </div>
@@ -1143,26 +933,20 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                 {(isDeployingMode || (!isDeployingMode && activeTab === 'all')) && (
                     <div className="mb-3 flex items-center gap-4 text-xs">
                         <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                Build
-                            </span>
+                            <span className="rounded border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] tracking-wider text-blue-400 uppercase">Build</span>
                             <span className="text-zinc-600">Build service logs</span>
                         </div>
                         <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                                Deploy
-                            </span>
+                            <span className="rounded border border-purple-500/20 bg-purple-500/10 px-2 py-0.5 text-[10px] tracking-wider text-purple-400 uppercase">Deploy</span>
                             <span className="text-zinc-600">Deployment service logs</span>
                         </div>
                     </div>
                 )}
-                
+
                 {!isDeployingMode && activeTab === 'live' && (
                     <div className="mb-3 flex items-center gap-4 text-xs">
                         <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider bg-green-500/10 text-green-400 border border-green-500/20">
-                                Container
-                            </span>
+                            <span className="rounded border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[10px] tracking-wider text-green-400 uppercase">Container</span>
                             <span className="text-zinc-600">Live container stdout/stderr</span>
                         </div>
                     </div>
@@ -1174,132 +958,95 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                         liveLogs.length === 0 ? (
                             <div className="flex h-full items-center justify-center text-zinc-600">
                                 <div className="text-center">
-                                    <Loader2 size={32} className="animate-spin mx-auto mb-3 text-zinc-700" />
+                                    <Loader2 size={32} className="mx-auto mb-3 animate-spin text-zinc-700" />
                                     <p>Initializing deployment...</p>
                                 </div>
                             </div>
                         ) : (
                             <>
                                 {liveLogs.map((log, idx) => (
-                                    <div key={idx} className="mb-2 flex gap-3 hover:bg-zinc-900/30 px-2 py-1.5 rounded transition-colors items-start">
-                                        <span className="text-zinc-700 shrink-0 w-16">[{log.time}]</span>
-                                        <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded shrink-0 mt-0.5 ${
-                                            log.source === 'build' 
-                                                ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' 
-                                                : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                                        }`}>
-                                            {log.source}
-                                        </span>
-                                        <span className={`flex-1 break-all ${
-                                            log.type === 'error' ? 'text-red-400' : 
-                                            log.type === 'success' ? 'text-green-400' : 
-                                            log.type === 'warning' ? 'text-yellow-400' : 
-                                            'text-zinc-400'
-                                        }`}>
-                                            {log.message}
-                                        </span>
+                                    <div key={idx} className="mb-2 flex items-start gap-3 rounded px-2 py-1.5 transition-colors hover:bg-zinc-900/30">
+                                        <span className="w-16 shrink-0 text-zinc-700">[{log.time}]</span>
+                                        <span className={`mt-0.5 shrink-0 rounded px-2 py-0.5 text-[10px] tracking-wider uppercase ${log.source === 'build' ? 'border border-blue-500/20 bg-blue-500/10 text-blue-400' : 'border border-purple-500/20 bg-purple-500/10 text-purple-400'}`}>{log.source}</span>
+                                        <span className={`flex-1 break-all ${log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'warning' ? 'text-yellow-400' : 'text-zinc-400'}`}>{log.message}</span>
                                     </div>
                                 ))}
                                 <div ref={liveLogsEndRef} />
                             </>
                         )
-                    ) : (
-                        // History Mode - Show based on active tab
-                        activeTab === 'live' ? (
-                            // Live Logs Tab - Show container logs
-                            !selectedContainerId ? (
-                                <div className="flex h-full items-center justify-center text-zinc-600">
-                                    <div className="text-center">
-                                        <Box size={48} className="mx-auto mb-4 text-zinc-800" />
-                                        <p className="text-lg font-medium text-zinc-500 mb-2">Select a Container</p>
-                                        <p className="text-sm text-zinc-700">Choose a container above to view live logs</p>
-                                    </div>
-                                </div>
-                            ) : containerLogs.length === 0 ? (
-                                <div className="flex h-full items-center justify-center text-zinc-600">
-                                    <div className="text-center">
-                                        {isContainerConnected ? (
-                                            <>
-                                                <Loader2 size={32} className="animate-spin mx-auto mb-3 text-zinc-700" />
-                                                <p>Waiting for container logs...</p>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Radio size={48} className="mx-auto mb-4 text-zinc-800" />
-                                                <p className="text-lg font-medium text-zinc-500 mb-2">Connecting...</p>
-                                                <p className="text-sm text-zinc-700">Establishing connection to container</p>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            ) : (
-                                <>
-                                    {containerLogs.map((log, idx) => (
-                                        <div key={idx} className="mb-2 flex gap-3 hover:bg-zinc-900/30 px-2 py-1.5 rounded transition-colors items-start">
-                                            <span className="text-zinc-700 shrink-0 w-16">[{log.time}]</span>
-                                            <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded shrink-0 mt-0.5 bg-green-500/10 text-green-400 border border-green-500/20">
-                                                Container
-                                            </span>
-                                            <span className={`flex-1 break-all ${
-                                                log.type === 'error' ? 'text-red-400' : 
-                                                log.type === 'success' ? 'text-green-400' : 
-                                                log.type === 'warning' ? 'text-yellow-400' : 
-                                                'text-zinc-400'
-                                            }`}>
-                                                {log.message}
-                                            </span>
-                                        </div>
-                                    ))}
-                                    <div ref={logsEndRef} />
-                                </>
-                            )
-                        ) : activeTab === 'all' && isLoadingHistorical ? (
-                            <div className="flex h-full items-center justify-center text-zinc-500">
-                                <div className="text-center">
-                                    <Loader2 className="animate-spin mx-auto mb-3" size={32} />
-                                    <p>Loading deployment history...</p>
-                                </div>
-                            </div>
-                        ) : activeTab === 'all' && historicalLogs.length === 0 ? (
+                    ) : // History Mode - Show based on active tab
+                    activeTab === 'live' ? (
+                        // Live Logs Tab - Show container logs
+                        !selectedContainerId ? (
                             <div className="flex h-full items-center justify-center text-zinc-600">
                                 <div className="text-center">
-                                    <FileText size={48} className="mx-auto mb-4 text-zinc-800" />
-                                    <p className="text-lg font-medium text-zinc-500 mb-2">No Logs Available</p>
-                                    <p className="text-sm text-zinc-700">No deployment logs found for this deployment</p>
+                                    <Box size={48} className="mx-auto mb-4 text-zinc-800" />
+                                    <p className="mb-2 text-lg font-medium text-zinc-500">Select a Container</p>
+                                    <p className="text-sm text-zinc-700">Choose a container above to view live logs</p>
+                                </div>
+                            </div>
+                        ) : containerLogs.length === 0 ? (
+                            <div className="flex h-full items-center justify-center text-zinc-600">
+                                <div className="text-center">
+                                    {isContainerConnected ? (
+                                        <>
+                                            <Loader2 size={32} className="mx-auto mb-3 animate-spin text-zinc-700" />
+                                            <p>Waiting for container logs...</p>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Radio size={48} className="mx-auto mb-4 text-zinc-800" />
+                                            <p className="mb-2 text-lg font-medium text-zinc-500">Connecting...</p>
+                                            <p className="text-sm text-zinc-700">Establishing connection to container</p>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         ) : (
-                            // All Logs Tab - Show Historical Logs
                             <>
-                                {historicalLogs.map((log, idx) => (
-                                    <div key={idx} className="mb-2 flex gap-3 hover:bg-zinc-900/30 px-2 py-1.5 rounded transition-colors items-start">
-                                        <span className="text-zinc-700 shrink-0 w-16">[{log.time}]</span>
-                                        <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded shrink-0 mt-0.5 ${
-                                            log.source === 'build' 
-                                                ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' 
-                                                : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                                        }`}>
-                                            {log.source}
-                                        </span>
-                                        <span className={`flex-1 break-all ${
-                                            log.type === 'error' ? 'text-red-400' : 
-                                            log.type === 'success' ? 'text-green-400' : 
-                                            log.type === 'warning' ? 'text-yellow-400' : 
-                                            'text-zinc-400'
-                                        }`}>
-                                            {log.message}
-                                        </span>
+                                {containerLogs.map((log, idx) => (
+                                    <div key={idx} className="mb-2 flex items-start gap-3 rounded px-2 py-1.5 transition-colors hover:bg-zinc-900/30">
+                                        <span className="w-16 shrink-0 text-zinc-700">[{log.time}]</span>
+                                        <span className="mt-0.5 shrink-0 rounded border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[10px] tracking-wider text-green-400 uppercase">Container</span>
+                                        <span className={`flex-1 break-all ${log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'warning' ? 'text-yellow-400' : 'text-zinc-400'}`}>{log.message}</span>
                                     </div>
                                 ))}
                                 <div ref={logsEndRef} />
                             </>
                         )
+                    ) : activeTab === 'all' && isLoadingHistorical ? (
+                        <div className="flex h-full items-center justify-center text-zinc-500">
+                            <div className="text-center">
+                                <Loader2 className="mx-auto mb-3 animate-spin" size={32} />
+                                <p>Loading deployment history...</p>
+                            </div>
+                        </div>
+                    ) : activeTab === 'all' && historicalLogs.length === 0 ? (
+                        <div className="flex h-full items-center justify-center text-zinc-600">
+                            <div className="text-center">
+                                <FileText size={48} className="mx-auto mb-4 text-zinc-800" />
+                                <p className="mb-2 text-lg font-medium text-zinc-500">No Logs Available</p>
+                                <p className="text-sm text-zinc-700">No deployment logs found for this deployment</p>
+                            </div>
+                        </div>
+                    ) : (
+                        // All Logs Tab - Show Historical Logs
+                        <>
+                            {historicalLogs.map((log, idx) => (
+                                <div key={idx} className="mb-2 flex items-start gap-3 rounded px-2 py-1.5 transition-colors hover:bg-zinc-900/30">
+                                    <span className="w-16 shrink-0 text-zinc-700">[{log.time}]</span>
+                                    <span className={`mt-0.5 shrink-0 rounded px-2 py-0.5 text-[10px] tracking-wider uppercase ${log.source === 'build' ? 'border border-blue-500/20 bg-blue-500/10 text-blue-400' : 'border border-purple-500/20 bg-purple-500/10 text-purple-400'}`}>{log.source}</span>
+                                    <span className={`flex-1 break-all ${log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'warning' ? 'text-yellow-400' : 'text-zinc-400'}`}>{log.message}</span>
+                                </div>
+                            ))}
+                            <div ref={logsEndRef} />
+                        </>
                     )}
                 </div>
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-between border-t border-zinc-800 bg-zinc-900/30 px-6 py-5">
+            <div className="flex items-center justify-between border-t border-zinc-800 px-6 py-5">
                 <div className="text-sm">
                     {isDeployingMode ? (
                         // Deploying Mode Footer
@@ -1356,20 +1103,11 @@ const DeploymentLogsViewer: React.FC<DeploymentLogsViewerProps> = ({
                                     Deployment Successful
                                 </span>
                             )}
-                            {activeTab === 'all' && status === 'pending' && (
-                                <span className="flex items-center gap-2 text-blue-400">
-                                    <Clock size={16} />
-                                    Deployment Pending
-                                </span>
-                            )}
                         </>
                     )}
                 </div>
                 <div className="flex items-center gap-3">
-                    <button 
-                        onClick={onClose} 
-                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 transition-colors"
-                    >
+                    <button onClick={onClose} className="rounded-lg border border-zinc-700 px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800">
                         Close
                     </button>
                 </div>

@@ -5,8 +5,11 @@ import db from '../config/postgresql';
 import { getUserIdFromSessionToken, getDataRegion, normalizeServiceName, getCompanyIdFromSessionToken } from '../lib/utils';
 import rabbitmq from '../config/rabbitmql';
 import crypto from 'crypto';
+import fs from 'fs';
 import { Octokit } from '@octokit/rest';
+import { createAppAuth } from '@octokit/auth-app';
 import { GetInstallationToken } from './GitHubService';
+import axios from 'axios';
 
 /**
  * Registers a new user account with Google authentication
@@ -156,6 +159,56 @@ const CreateProject = async (req: Request, res: Response) => {
 
         const project = result.rows[0];
 
+        // Insert default project settings
+        await db.query(
+            `INSERT INTO project_settings (
+                project_id,
+                domains,
+                caching_enabled,
+                cache_ttl,
+                compress_assets,
+                image_optimization,
+                cdn_enabled,
+                https_enabled,
+                https_enforce,
+                https_certificate_id,
+                rate_limiting_enabled,
+                rate_limiting_max_requests,
+                rate_limiting_window_seconds,
+                rate_limiting_burst_limit,
+                rate_limiting_burst_period_seconds,
+                perform_health_checks,
+                health_check_url,
+                build_cache_enabled,
+                parallel_builds,
+                build_optimization_enabled,
+                fail_on_warning
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+            [
+                project.id, // project_id
+                null, // domains - no domains set
+                true, // caching_enabled - enable caching true
+                3600, // cache_ttl - 3600 seconds
+                true, // compress_assets - enable compression true
+                true, // image_optimization - image optimization true
+                true, // cdn_enabled - cdn integration true
+                true, // https_enabled - enable https true
+                false, // https_enforce - enforce https false
+                null, // https_certificate_id
+                false, // rate_limiting_enabled - enable rate limit false
+                null, // rate_limiting_max_requests
+                null, // rate_limiting_window_seconds
+                null, // rate_limiting_burst_limit
+                null, // rate_limiting_burst_period_seconds
+                false, // perform_health_checks - perform healthcheck false
+                null, // health_check_url
+                true, // build_cache_enabled
+                true, // parallel_builds - parallel builds true
+                false, // build_optimization_enabled - build optimization false
+                false, // fail_on_warning - fail on warnings false
+            ],
+        );
+
         const response = {
             id: project.id,
             projectName: project.project_name,
@@ -185,6 +238,106 @@ const CreateProject = async (req: Request, res: Response) => {
         return res.status(500).json({
             error: true,
             errmsg: 'Failed to create project',
+        });
+    }
+};
+
+const UpdateProjectSettings = async (req: Request, res: Response) => {
+    const errors = CustomRequestValidationResult(req);
+    if (!errors.isEmpty()) {
+        errors.array().map((error) => {
+            logging.error('UPDATE-PROJECT-SETTINGS', error.errorMsg);
+        });
+
+        return res.status(401).json({ error: true, errors: errors.array() });
+    }
+
+    try {
+        const {
+            projectId,
+            domains,
+            caching,
+            cacheTTL,
+            compressAssets,
+            imageOptimization,
+            cdnEnabled,
+            httpsEnabled,
+            httpsEnforce,
+            httpsCertificate,
+            rateLimit,
+            rateLimitMaxRequests,
+            rateLimitWindow,
+            rateLimitBurst,
+            rateLimitBurstPeriod,
+            performHealthChecks,
+            healthCheckUrl,
+            buildCacheEnabled,
+            parallelBuilds,
+            buildOptimization,
+            failOnWarnings,
+        } = req.body;
+
+        await db.query(
+            `
+            UPDATE project_settings
+            SET
+                domains = $2,
+                caching_enabled = $3,
+                cache_ttl = $4,
+                compress_assets = $5,
+                image_optimization = $6,
+                cdn_enabled = $7,
+                https_enabled = $8,
+                https_enforce = $9,
+                https_certificate_id = $10,
+                rate_limiting_enabled = $11,
+                rate_limiting_max_requests = $12,
+                rate_limiting_window_seconds = $13,
+                rate_limiting_burst_limit = $14,
+                rate_limiting_burst_period_seconds = $15,
+                perform_health_checks = $16,
+                health_check_url = $17,
+                build_cache_enabled = $18,
+                parallel_builds = $19,
+                build_optimization_enabled = $20,
+                fail_on_warning = $21
+            WHERE project_id = $1
+            `,
+            [
+                projectId,
+                domains,
+                caching,
+                cacheTTL,
+                compressAssets,
+                imageOptimization,
+                cdnEnabled,
+                httpsEnabled,
+                httpsEnforce,
+                httpsCertificate,
+                rateLimit,
+                rateLimitMaxRequests,
+                rateLimitWindow,
+                rateLimitBurst,
+                rateLimitBurstPeriod,
+                performHealthChecks,
+                healthCheckUrl,
+                buildCacheEnabled,
+                parallelBuilds,
+                buildOptimization,
+                failOnWarnings,
+            ],
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: 'Project settings updated successfully',
+        });
+    } catch (error: any) {
+        logging.error('UPDATE-PROJECT-SETTINGS', error.message);
+
+        return res.status(500).json({
+            error: true,
+            errmsg: 'Failed to update project settings',
         });
     }
 };
@@ -254,6 +407,309 @@ const GetProjects = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('get projects error:', error);
         res.status(500).json({ error: 'Failed to get projects' });
+    }
+};
+
+const removeRepositoryFromGitHubApp = async (installationId: number, owner: string, repoName: string, repoId?: string): Promise<void> => {
+    try {
+        logging.info('GITHUB-REMOVE-REPO', `Starting removal process for ${owner}/${repoName} from installation ${installationId}`);
+        logging.info('GITHUB-REMOVE-REPO', `Environment check - GITHUB_APP_ID: ${process.env.GITHUB_APP_ID ? 'Set' : 'NOT SET'}, PRIVATE_KEY_PATH: ${process.env.GITHUB_APP_PRIVATE_KEY_PATH ? 'Set' : 'NOT SET'}`);
+
+        const privateKey = process.env.GITHUB_APP_PRIVATE_KEY_PATH ? fs.readFileSync(process.env.GITHUB_APP_PRIVATE_KEY_PATH, 'utf-8') : process.env.GITHUB_APP_PRIVATE_KEY;
+
+        if (!privateKey) {
+            throw new Error('GitHub App private key not found in environment');
+        }
+
+        const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: {
+                appId: process.env.GITHUB_APP_ID!,
+                privateKey: privateKey,
+                installationId: installationId,
+            },
+        });
+
+        let repositoryId: number;
+
+        if (repoId && !isNaN(parseInt(repoId))) {
+            repositoryId = parseInt(repoId);
+            logging.info('GITHUB-REMOVE-REPO', `Using stored repository ID: ${repositoryId}`);
+        } else {
+            logging.info('GITHUB-REMOVE-REPO', `Fetching repository ID for ${owner}/${repoName}...`);
+
+            try {
+                const { data: repo } = await appOctokit.rest.repos.get({
+                    owner: owner,
+                    repo: repoName,
+                });
+
+                repositoryId = repo.id;
+                logging.info('GITHUB-REMOVE-REPO', `Found repository ID: ${repositoryId}`);
+            } catch (fetchError: any) {
+                logging.error('GITHUB-REMOVE-REPO', `Failed to fetch repository ${owner}/${repoName}: ${fetchError.message}`);
+                throw fetchError;
+            }
+        }
+
+        logging.info('GITHUB-REMOVE-REPO', `Attempting to remove repository ID ${repositoryId} from installation ${installationId}`);
+
+        try {
+            // Use the correct API endpoint for user installations
+            await appOctokit.request('DELETE /user/installations/{installation_id}/repositories/{repository_id}', {
+                installation_id: installationId,
+                repository_id: repositoryId,
+            });
+
+            logging.info('GITHUB-REMOVE-REPO', `Successfully removed repository ${owner}/${repoName} (ID: ${repositoryId}) from installation ${installationId}`);
+        } catch (apiError: any) {
+            logging.error('GITHUB-REMOVE-REPO', `API call failed: ${apiError.message}`);
+            logging.error('GITHUB-REMOVE-REPO', `API error status: ${apiError.status}, response: ${JSON.stringify(apiError.response?.data)}`);
+            throw apiError;
+        }
+    } catch (error: any) {
+        logging.error('GITHUB-REMOVE-REPO', `Full error details: ${error.message}`);
+        logging.error('GITHUB-REMOVE-REPO', `Error stack: ${error.stack}`);
+
+        if (error.status === 404) {
+            logging.warn('GITHUB-REMOVE-REPO', `Repository ${owner}/${repoName} not found in installation ${installationId} - may already be removed`);
+        } else if (error.status === 403) {
+            logging.error('GITHUB-REMOVE-REPO', `Permission denied: GitHub App may not have permission to remove repository ${owner}/${repoName}. This requires 'Repository administration' permission.`);
+            throw new Error(`GitHub App permission denied: ${error.message}`);
+        } else {
+            logging.error('GITHUB-REMOVE-REPO', `Failed to remove repository ${owner}/${repoName}: ${error.message}`);
+            throw error;
+        }
+    }
+};
+
+const DeleteProject = async (req: Request, res: Response) => {
+    const client = await db.connect();
+
+    try {
+        const { projectId, accessToken } = req.body;
+
+        const errors = CustomRequestValidationResult(req);
+        if (!errors.isEmpty()) {
+            errors.array().forEach((error) => {
+                logging.error('DELETE-PROJECT', error.errorMsg);
+            });
+            return res.status(401).json({ error: true, errors: errors.array() });
+        }
+
+        const userId = await getUserIdFromSessionToken(accessToken);
+        if (!userId) {
+            return res.status(401).json({
+                error: true,
+                errmsg: 'Invalid or expired access token',
+            });
+        }
+
+        await client.query('BEGIN');
+
+        const projectResult = await client.query(
+            `SELECT 
+                p.id,
+                p.github_installation_id,
+                p.github_repository_id,
+                p.github_repository_full_name
+            FROM projects p
+            WHERE p.id = $1`,
+            [projectId],
+        );
+
+        if (projectResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                error: true,
+                errmsg: 'Project not found',
+            });
+        }
+
+        const project = projectResult.rows[0];
+
+        // Get all active containers before deletion to cleanup Docker/Traefik
+        const containersResult = await client.query(
+            `SELECT container_id, container_name 
+             FROM deployment_containers dc
+             JOIN deployments d ON d.id = dc.deployment_id
+             WHERE d.project_id = $1 AND dc.status IN ('running', 'healthy', 'starting')`,
+            [projectId],
+        );
+        const activeContainers = containersResult.rows;
+
+        if (activeContainers.length > 0) {
+            logging.info('DELETE-PROJECT', `Found ${activeContainers.length} active containers for project ${projectId}, publishing cleanup message`);
+
+            try {
+                await rabbitmq.connect();
+                const channel = await rabbitmq.getChannel();
+
+                await channel.publish(
+                    'obtura.deploys',
+                    'project.cleanup',
+                    Buffer.from(
+                        JSON.stringify({
+                            projectId: projectId,
+                            containers: activeContainers.map((c) => ({
+                                containerId: c.container_id,
+                                containerName: c.container_name,
+                            })),
+                            timestamp: Date.now(),
+                        }),
+                    ),
+                    { persistent: true, timestamp: Date.now() },
+                );
+
+                logging.info('DELETE-PROJECT', `Published cleanup message for ${activeContainers.length} containers`);
+
+                // Wait a bit for cleanup to start
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+            } catch (rabbitError: any) {
+                logging.error('DELETE-PROJECT', `Failed to publish cleanup message: ${rabbitError.message}`);
+                // Continue with deletion even if RabbitMQ fails
+            }
+        }
+
+        // Handle GitHub App removal
+        if (project.github_installation_id) {
+            let owner: string | null = null;
+            let repoName: string | null = null;
+            let repoInfo: any = null;
+
+            try {
+                logging.info('DELETE-PROJECT', `GitHub installation found: ${project.github_installation_id}, repo_id: ${project.github_repository_id}, full_name: ${project.github_repository_full_name}`);
+
+                // Get repository info from the installation's repositories array
+                if (project.github_repository_id) {
+                    const installQuery = await client.query('SELECT installation_id, repositories FROM github_installations WHERE installation_id = $1', [project.github_installation_id]);
+
+                    if (installQuery.rows.length > 0) {
+                        const repos = installQuery.rows[0].repositories || [];
+                        repoInfo = repos.find((r: any) => r.id?.toString() === project.github_repository_id.toString());
+                        if (repoInfo) {
+                            // Try fullName first, then fall back to name
+                            const fullName = repoInfo.fullName || repoInfo.full_name;
+                            if (fullName) {
+                                const parts = fullName.split('/');
+                                owner = parts[0];
+                                repoName = parts[1];
+                            }
+                            logging.info('DELETE-PROJECT', `Found repo info from installation data: ${owner}/${repoName}`);
+                        }
+                    }
+                }
+
+                // Fallback to stored full name
+                if (!owner && project.github_repository_full_name) {
+                    const parts = project.github_repository_full_name.split('/');
+                    owner = parts[0];
+                    repoName = parts[1];
+                    logging.info('DELETE-PROJECT', `Using stored full name: ${owner}/${repoName}`);
+                }
+
+                // Try to remove from GitHub API if we have owner/repo
+                if (owner && repoName && project.github_repository_id) {
+                    logging.info('DELETE-PROJECT', `Removing GitHub app for ${owner}/${repoName} from installation ${project.github_installation_id}`);
+
+                    try {
+                        await removeRepositoryFromGitHubApp(project.github_installation_id, owner, repoName, project.github_repository_id);
+                        logging.info('DELETE-PROJECT', `Successfully called GitHub API to remove repo`);
+                    } catch (githubApiError: any) {
+                        logging.error('DELETE-PROJECT', `GitHub API error: ${githubApiError.message}`);
+                        // Continue with DB cleanup even if GitHub API fails
+                    }
+                } else {
+                    logging.warn('DELETE-PROJECT', `Cannot remove from GitHub API - missing owner/repo name. Owner: ${owner}, Repo: ${repoName}, ID: ${project.github_repository_id}`);
+                }
+
+                // Always remove from DB if we have repository_id
+                const repoId = project.github_repository_id;
+                if (repoId && project.github_installation_id) {
+                    logging.info('DELETE-PROJECT', `Removing repo ID ${repoId} from installation ${project.github_installation_id} in DB`);
+
+                    const updateResult = await client.query(
+                        `UPDATE github_installations 
+                         SET repositories = COALESCE(
+                             (SELECT jsonb_agg(repo)
+                              FROM jsonb_array_elements(repositories) AS repo
+                              WHERE (repo->>'id')::text != $1),
+                             '[]'::jsonb
+                         ),
+                         updated_at = NOW()
+                         WHERE installation_id = $2
+                         RETURNING installation_id, repositories`,
+                        [repoId.toString(), project.github_installation_id],
+                    );
+
+                    logging.info('DELETE-PROJECT', `DB update affected ${updateResult.rowCount} rows`);
+
+                    // Verify the update
+                    if (updateResult.rows.length > 0) {
+                        const reposAfter = updateResult.rows[0].repositories || [];
+                        logging.info('DELETE-PROJECT', `AFTER: Installation ${project.github_installation_id} has ${reposAfter.length} repos`);
+                        if (reposAfter.length > 0) {
+                            logging.info('DELETE-PROJECT', `Remaining repos: ${reposAfter.map((r: any) => r.fullName || r.name).join(', ')}`);
+                        } else {
+                            logging.info('DELETE-PROJECT', `No repos remaining in installation`);
+                        }
+                    }
+                } else {
+                    logging.warn('DELETE-PROJECT', `Missing repo_id (${repoId}) or installation_id (${project.github_installation_id}), skipping DB update`);
+                }
+
+                logging.info('DELETE-PROJECT', `Completed GitHub removal process`);
+            } catch (githubError: any) {
+                logging.error('DELETE-PROJECT', `Failed to remove GitHub integration: ${githubError.message}`);
+                logging.error('DELETE-PROJECT', `Error stack: ${githubError.stack}`);
+                // Don't fail the deletion if GitHub removal fails
+            }
+        } else {
+            logging.info('DELETE-PROJECT', `No GitHub integration found for project ${projectId}`);
+        }
+
+        await client.query('DELETE FROM deployment_phase_transitions WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM canary_analysis_results WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM container_health_checks WHERE container_id IN (SELECT id FROM deployment_containers WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1))', [projectId]);
+        await client.query('DELETE FROM container_metrics WHERE container_id IN (SELECT id FROM deployment_containers WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1))', [projectId]);
+        await client.query('DELETE FROM deployment_containers WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_strategy_state WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_traffic_routing WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_metrics WHERE project_id = $1', [projectId]);
+        await client.query('DELETE FROM deployment_alerts WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_resources WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_env_history WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_rollbacks WHERE from_deployment_id IN (SELECT id FROM deployments WHERE project_id = $1) OR to_deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_approvals WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_events WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployment_logs WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM deployments WHERE project_id = $1', [projectId]);
+
+        // await client.query('DELETE FROM build_usage WHERE build_id IN (SELECT id FROM builds WHERE project_id = $1)', [projectId]);
+        await client.query('DELETE FROM builds WHERE project_id = $1', [projectId]);
+
+        await client.query('DELETE FROM project_env_configs WHERE project_id = $1', [projectId]);
+        await client.query('DELETE FROM project_settings WHERE project_id = $1', [projectId]);
+        await client.query('DELETE FROM projects WHERE id = $1', [projectId]);
+
+        await client.query('COMMIT');
+
+        logging.info('DELETE-PROJECT', `Project ${projectId} deleted successfully by user ${userId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'Project and all associated data deleted successfully',
+        });
+    } catch (error: any) {
+        await client.query('ROLLBACK');
+        logging.error('DELETE-PROJECT', `Failed to delete project: ${error.message}`);
+        console.error('Delete project error:', error);
+        res.status(500).json({
+            error: true,
+            errmsg: 'Failed to delete project',
+        });
+    } finally {
+        client.release();
     }
 };
 
@@ -457,7 +913,7 @@ const TriggerBuild = async (req: Request, res: Response) => {
     }
 
     try {
-        const { accessToken, projectId } = req.body;
+        const { accessToken, projectId, branch: requestedBranch, commitHash: requestedCommit } = req.body;
 
         const userID = await getUserIdFromSessionToken(accessToken);
 
@@ -485,17 +941,21 @@ const TriggerBuild = async (req: Request, res: Response) => {
 
         const project = projectResult.rows[0];
 
-        const gitBranches = project.git_branches || [];
-        const productionBranch = gitBranches.find((b: any) => b.type === 'production');
+        let branch = requestedBranch;
+        let commitHash = requestedCommit;
 
-        if (!productionBranch || !productionBranch.branch) {
-            return res.status(400).json({
-                error: true,
-                errmsg: 'No production branch configured for this project',
-            });
+        if (!branch) {
+            const gitBranches = project.git_branches || [];
+            const productionBranch = gitBranches.find((b: any) => b.type === 'production');
+
+            if (!productionBranch || !productionBranch.branch) {
+                return res.status(400).json({
+                    error: true,
+                    errmsg: 'No production branch configured for this project',
+                });
+            }
+            branch = productionBranch.branch;
         }
-
-        const branch = productionBranch.branch;
 
         if (!project.installation_id || !project.git_repo_url) {
             return res.status(400).json({
@@ -503,8 +963,6 @@ const TriggerBuild = async (req: Request, res: Response) => {
                 errmsg: 'GitHub integration not configured for this project',
             });
         }
-
-        let commitHash: string;
 
         try {
             const token = await GetInstallationToken(project.installation_id);
@@ -521,20 +979,23 @@ const TriggerBuild = async (req: Request, res: Response) => {
             const [, owner, repo] = repoMatch;
 
             const octokit = new Octokit({ auth: token });
-            const { data } = await octokit.rest.repos.getBranch({
-                owner,
-                repo,
-                branch: branch,
-            });
 
-            commitHash = data.commit.sha;
-
-            console.log(`Fetched latest commit: ${commitHash} for branch ${branch}`);
+            if (!commitHash) {
+                const { data } = await octokit.rest.repos.getBranch({
+                    owner,
+                    repo,
+                    branch: branch,
+                });
+                commitHash = data.commit.sha;
+                console.log(`Fetched latest commit: ${commitHash} for branch ${branch}`);
+            } else {
+                console.log(`Using provided commit: ${commitHash} for branch ${branch}`);
+            }
         } catch (githubError: any) {
             console.error('Error fetching commit from GitHub:', githubError);
             return res.status(500).json({
                 error: true,
-                errmsg: 'Failed to fetch latest commit from GitHub: ' + githubError.message,
+                errmsg: 'Failed to fetch commit from GitHub: ' + githubError.message,
             });
         }
 
@@ -1003,7 +1464,35 @@ const GetProjectDetails = async (req: Request, res: Response) => {
         const { projectId } = req.params;
 
         const query = `
-       WITH latest_deployments AS (
+       WITH project_settings_data AS (
+    SELECT 
+        ps.project_id,
+        json_build_object(
+            'domains', COALESCE(ps.domains::jsonb, '[]'::jsonb),
+            'cachingEnabled', ps.caching_enabled,
+            'cacheTTL', ps.cache_ttl,
+            'compressAssets', ps.compress_assets,
+            'imageOptimization', ps.image_optimization,
+            'cdnEnabled', ps.cdn_enabled,
+            'httpsEnabled', ps.https_enabled,
+            'httpsEnforce', ps.https_enforce,
+            'httpsCertificateId', ps.https_certificate_id,
+            'rateLimitingEnabled', ps.rate_limiting_enabled,
+            'rateLimitingMaxRequests', ps.rate_limiting_max_requests,
+            'rateLimitingWindowSeconds', ps.rate_limiting_window_seconds,
+            'rateLimitingBurstLimit', ps.rate_limiting_burst_limit,
+            'rateLimitingBurstPeriodSeconds', ps.rate_limiting_burst_period_seconds,
+            'performHealthChecks', ps.perform_health_checks,
+            'healthCheckUrl', ps.health_check_url,
+            'buildCacheEnabled', ps.build_cache_enabled,
+            'parallelBuilds', ps.parallel_builds,
+            'buildOptimizationEnabled', ps.build_optimization_enabled,
+            'failOnWarning', ps.fail_on_warning
+        ) as settings
+    FROM project_settings ps
+    WHERE ps.project_id = $1
+),
+latest_deployments AS (
     SELECT DISTINCT ON (d.project_id, d.environment)
         d.id,
         d.project_id,
@@ -1082,16 +1571,35 @@ deployment_alerts_info AS (
         da.deployment_id,
         json_agg(
             json_build_object(
+                'id', da.id,
                 'type', da.alert_type,
                 'severity', da.severity,
                 'message', da.alert_message,
                 'resolved', da.resolved,
-                'createdAt', da.created_at
+                'timestamp', da.created_at
             ) ORDER BY da.created_at DESC
         ) FILTER (WHERE da.resolved = false) as unresolved_alerts,
         COUNT(*) FILTER (WHERE da.resolved = false) as unresolved_alert_count
     FROM deployment_alerts da
     GROUP BY da.deployment_id
+),
+project_alerts_info AS (
+    SELECT 
+        da.project_id,
+        json_agg(
+            json_build_object(
+                'id', da.id,
+                'type', da.alert_type,
+                'severity', da.severity,
+                'message', da.alert_message,
+                'resolved', da.resolved,
+                'timestamp', da.created_at
+            ) ORDER BY da.created_at DESC
+        ) FILTER (WHERE da.resolved = false AND da.deployment_id IS NULL) as project_only_alerts,
+        COUNT(*) FILTER (WHERE da.resolved = false AND da.deployment_id IS NULL) as project_alert_count
+    FROM deployment_alerts da
+    WHERE da.project_id = $1
+    GROUP BY da.project_id
 ),
 preview_deployments AS (
     SELECT 
@@ -1243,6 +1751,9 @@ SELECT
         WHEN p.deleted_at IS NULL THEN 'active'
         ELSE 'inactive'
     END as status,
+    
+    -- Project Settings
+    COALESCE(psd.settings, '{}'::json) as settings,
     
     -- Production deployment with enhanced info
     COALESCE(
@@ -1451,6 +1962,7 @@ SELECT
 FROM projects p
 LEFT JOIN teams t ON t.id = p.team_id
 LEFT JOIN latest_build lb ON true
+LEFT JOIN project_settings_data psd ON psd.project_id = p.id
 LEFT JOIN latest_deployments prod ON prod.project_id = p.id AND prod.environment = 'production'
 LEFT JOIN latest_deployments stg ON stg.project_id = p.id AND stg.environment = 'staging'
 LEFT JOIN deployment_containers_info prod_containers ON prod_containers.deployment_id = prod.id
@@ -1459,6 +1971,7 @@ LEFT JOIN deployment_strategy_info prod_strategy ON prod_strategy.deployment_id 
 LEFT JOIN deployment_strategy_info stg_strategy ON stg_strategy.deployment_id = stg.id
 LEFT JOIN deployment_alerts_info prod_alerts ON prod_alerts.deployment_id = prod.id
 LEFT JOIN deployment_alerts_info stg_alerts ON stg_alerts.deployment_id = stg.id
+LEFT JOIN project_alerts_info proj_alerts ON proj_alerts.project_id = p.id
 LEFT JOIN latest_metrics m ON true
 WHERE p.id = $1
     AND p.deleted_at IS NULL;
@@ -1486,10 +1999,11 @@ WHERE p.id = $1
                 isMonorepo: project.is_monorepo,
                 frameworks: project.frameworks || null,
                 status: project.status,
+                settings: project.settings,
                 production: project.production,
                 gitRepoUrl: project.git_repo_url,
                 builds: project.builds || [],
-                deployments: project.deployments || [], // NEW: Deployment history
+                deployments: project.deployments || [],
                 staging: project.staging,
                 preview: project.preview || [],
                 metrics: project.metrics,
@@ -1504,13 +2018,69 @@ WHERE p.id = $1
     }
 };
 
+const DeleteDeployment = async (req: Request, res: Response) => {
+    const errors = CustomRequestValidationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(401).json({ error: true, errors: errors.array() });
+    }
+
+    try {
+        const { deploymentId } = req.params;
+        const { projectId } = req.body;
+
+        const deploymentCheck = await db.query(
+            `SELECT d.id, d.project_id, dc.container_id 
+             FROM deployments d 
+             LEFT JOIN deployment_containers dc ON dc.deployment_id = d.id 
+             WHERE d.id = $1`,
+            [deploymentId],
+        );
+
+        if (deploymentCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Deployment not found' });
+        }
+
+        if (deploymentCheck.rows[0].project_id !== projectId) {
+            return res.status(403).json({ error: 'Deployment does not belong to this project' });
+        }
+
+        const deployServiceUrl = process.env.DEPLOY_SERVICE_URL;
+
+        const containerIds = deploymentCheck.rows.filter((row) => row.container_id).map((row) => row.container_id);
+
+        if (containerIds.length > 0) {
+            try {
+                await axios.post(`${deployServiceUrl}/api/deployments/${deploymentId}/containers/stop`, {
+                    containerIds,
+                });
+            } catch (err) {
+                console.error('Failed to stop containers:', err);
+            }
+        }
+
+        await db.query('DELETE FROM deployment_strategy_state WHERE deployment_id = $1', [deploymentId]);
+        await db.query('DELETE FROM deployment_events WHERE deployment_id = $1', [deploymentId]);
+        await db.query('DELETE FROM container_health_checks WHERE deployment_id = $1', [deploymentId]);
+        await db.query('DELETE FROM deployment_containers WHERE deployment_id = $1', [deploymentId]);
+        await db.query('DELETE FROM deployments WHERE id = $1', [deploymentId]);
+
+        res.status(200).json({ success: true, message: 'Deployment deleted successfully' });
+    } catch (error) {
+        console.error('Delete deployment error:', error);
+        res.status(500).json({ error: 'Failed to delete deployment' });
+    }
+};
+
 export default {
     RegisterUserWithGoogle,
     GetProjects,
+    UpdateProjectSettings,
+    DeleteProject,
     GetProjectDetails,
     TriggerBuild,
     TriggerDeploy,
     DeleteBuild,
+    DeleteDeployment,
     GetEnvConfigs,
     UploadEnvConfig,
     UpdateEnvVariables,
