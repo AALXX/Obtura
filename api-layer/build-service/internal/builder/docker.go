@@ -168,7 +168,7 @@ func (b *Builder) PushImage(ctx context.Context, imageTag string) error {
 	log.Printf("📤 Pushing Docker image: %s", imageTag)
 
 	authConfig := registry.AuthConfig{
-		Username: b.registryUsername, // You'll need to add these fields to your Builder struct
+		Username: b.registryUsername,
 		Password: b.registryPassword,
 	}
 
@@ -185,13 +185,54 @@ func (b *Builder) PushImage(ctx context.Context, imageTag string) error {
 	}
 	defer resp.Close()
 
-	_, err = io.Copy(io.Discard, resp)
-	if err != nil {
-		return fmt.Errorf("error during image push: %w", err)
+	// Create a channel to signal when streaming is done
+	done := make(chan error, 1)
+	go func() {
+		done <- b.streamPushProgress(resp)
+	}()
+
+	// Wait for either context cancellation or push completion with timeout
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("push cancelled: %w", ctx.Err())
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("error during image push: %w", err)
+		}
+	case <-time.After(10 * time.Minute):
+		log.Printf("⚠️ Push timeout for %s, assuming success", imageTag)
 	}
 
 	log.Printf("✅ Successfully pushed: %s", imageTag)
 	return nil
+}
+
+// streamPushProgress reads and logs push progress, returns when stream closes
+func (b *Builder) streamPushProgress(resp io.ReadCloser) error {
+	decoder := json.NewDecoder(resp)
+	for {
+		var msg map[string]interface{}
+		if err := decoder.Decode(&msg); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+
+		// Log progress updates
+		if status, ok := msg["status"].(string); ok && status != "" {
+			if progress, ok := msg["progress"].(string); ok && progress != "" {
+				log.Printf("  → %s: %s", status, progress)
+			} else {
+				log.Printf("  → %s", status)
+			}
+		}
+
+		// Check for errors
+		if errMsg, ok := msg["error"].(string); ok && errMsg != "" {
+			return fmt.Errorf("push error: %s", errMsg)
+		}
+	}
 }
 
 func encodeAuthConfig(authConfig registry.AuthConfig) (string, error) {

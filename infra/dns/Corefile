@@ -1,0 +1,35 @@
+# CoreDNS Configuration for Obtura Dev Environment
+# Provides secure internal DNS resolution
+
+.:53 {
+    # Forward external queries to trusted DNS
+    forward . 8.8.8.8 8.8.4.4 {
+        prefer_udp
+        expire 10s
+    }
+    
+    # Enable caching
+    cache 30
+    
+    # Log queries (for debugging)
+    log
+    
+    # Health check endpoint
+    health :8080
+    
+    # Prometheus metrics (optional)
+    prometheus :9153
+    
+    # Round-robin load balancing
+    loadbalance round_robin
+    
+    # Handle Docker internal DNS
+    # Docker containers can use this DNS server
+}
+
+# Internal domain for obtura services
+obtura.local:53 {
+    # Use Docker's embedded DNS for internal resolution
+    forward . 127.0.0.11:53
+    cache 30
+}

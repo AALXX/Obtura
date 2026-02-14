@@ -14,7 +14,7 @@ const Employees: React.FC<{ employeesInitial: EmployeeData[]; accessToken: strin
     const filteredEmployees = employees.filter(employee => employee.name.toLowerCase().includes(searchQuery.toLowerCase()) || employee.email.toLowerCase().includes(searchQuery.toLowerCase()) || employee.rolename.toLowerCase().includes(searchQuery.toLowerCase()) || employee.teamname!.toLowerCase().includes(searchQuery.toLowerCase()))
 
     return (
-        <div className="min-h-screen  text-white">
+        <div className="min-h-screen text-white">
             <div className="container mx-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-7">
                 <div className="mb-6 flex items-start justify-between">
                     <div>
@@ -40,7 +40,7 @@ const Employees: React.FC<{ employeesInitial: EmployeeData[]; accessToken: strin
 
                 <div className="space-y-3">
                     {filteredEmployees.map(employee => (
-                        <EmployeeCard key={employee.id} {...employee} />
+                        <EmployeeCard key={employee.id} {...employee} accessToken={accessToken} />
                     ))}
 
                     {filteredEmployees.length === 0 && (

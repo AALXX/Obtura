@@ -64,7 +64,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, a
 
     const handleGetEmailChangeLink = async () => {
         try {
-            const resp = await axios.post<any>(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/get-change-email-link`, {
+            const resp = await axios.post<any>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/user-account-manager/get-change-email-link`, {
                 accessToken: accessToken
             })
 
@@ -78,7 +78,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ name, email, image, a
 
     const handleGetPasswordChangeLink = async () => {
         try {
-            const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_SERVER}/api/user-account-manager/get-change-password-link`, {
+            const resp = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/user-account-manager/get-change-password-link`, {
                 accessToken: accessToken
             })
         } catch (error) {

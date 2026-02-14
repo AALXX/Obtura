@@ -269,7 +269,7 @@ func (s *Server) queryLogEvents(ctx context.Context, req LogQueryRequest) ([]Pla
 	}
 
 	// Add ordering and pagination
-	query += " ORDER BY event_timestamp DESC"
+	query += " ORDER BY event_timestamp ASC"
 	if req.Limit > 0 {
 		argCount++
 		query += fmt.Sprintf(" LIMIT $%d", argCount)

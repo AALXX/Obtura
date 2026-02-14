@@ -7,6 +7,7 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-git/go-git/v6 v6.0.0-20251224103503-78aff6aa5ea9
+	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.10.9
 	github.com/minio/minio-go/v7 v7.0.97
 	github.com/opencontainers/runtime-spec v1.3.0
@@ -47,7 +48,6 @@ require (
 	github.com/goccy/go-yaml v1.19.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kevinburke/ssh_config v1.4.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect

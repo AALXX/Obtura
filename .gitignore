@@ -4,6 +4,8 @@
 
 /api-layer/core-api/node_modules
 /api-layer/core-api/.env
+
+/api-layer/payment-service/node_modules
 docker-compose.dev.yml
 .idea
 
@@ -18,3 +20,5 @@ docker-compose.dev.yml
 /api-layer/build-service/tmp/
 /api-layer/deploy-service/tmp/
 /api-layer/monitoring-service/tmp/
+
+/Docs
