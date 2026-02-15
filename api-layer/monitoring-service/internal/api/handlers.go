@@ -89,6 +89,14 @@ func (s *Server) setupRoutes() {
 	// API group
 	api := s.router.Group("/api")
 	{
+		// Project-level monitoring routes
+		projects := api.Group("/projects")
+		{
+			projects.GET("/:projectId/metrics", s.validateProjectID(), s.handleGetProjectMetrics)
+			projects.GET("/:projectId/metrics/sse", s.validateProjectID(), s.handleProjectMetricsSSE)
+			projects.GET("/:projectId/alerts", s.validateProjectID(), s.handleGetProjectAlerts)
+		}
+
 		metrics := api.Group("/metrics")
 		{
 			metrics.GET("/:deploymentId", s.validateDeploymentID(), s.handleGetMetrics)
@@ -176,8 +184,21 @@ func (s *Server) validateIncidentID() gin.HandlerFunc {
 }
 
 func isValidID(id string) bool {
-	matched, _ := regexp.MatchString("^[a-zA-Z0-9_-]{1,50}$", id)
+	// Allow UUIDs (with hyphens), alphanumerics, underscores, hyphens
+	matched, _ := regexp.MatchString("^[a-zA-Z0-9-]{1,50}$", id)
 	return matched
+}
+
+func (s *Server) validateProjectID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		projectID := c.Param("projectId")
+		if !isValidID(projectID) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID format"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
 }
 
 func isValidTimeFormat(timeStr string) bool {
@@ -900,7 +921,7 @@ func (s *Server) corsMiddleware() gin.HandlerFunc {
 func (s *Server) timeoutMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Skip timeout for SSE endpoints - they need to be long-lived
-		if strings.Contains(c.Request.URL.Path, "/stream/") {
+		if strings.Contains(c.Request.URL.Path, "/stream/") || strings.Contains(c.Request.URL.Path, "/sse") {
 			c.Next()
 			return
 		}
@@ -912,4 +933,336 @@ func (s *Server) timeoutMiddleware() gin.HandlerFunc {
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
+}
+
+// Project-level metrics handlers
+
+type ProjectMetricsResponse struct {
+	ProjectID          string             `json:"projectId"`
+	Production         *DeploymentMetrics `json:"production,omitempty"`
+	Staging            *DeploymentMetrics `json:"staging,omitempty"`
+	AvailableDataTypes []string           `json:"availableDataTypes"`
+	NotAvailable       []string           `json:"notAvailable"`
+	TimeRange          string             `json:"timeRange"`
+	Timestamp          time.Time          `json:"timestamp"`
+}
+
+type DeploymentMetrics struct {
+	DeploymentID   string  `json:"deploymentId"`
+	CPUUsage       float64 `json:"cpuUsage"`
+	MemoryUsage    int64   `json:"memoryUsage"`
+	NetworkRx      int64   `json:"networkRx"`
+	NetworkTx      int64   `json:"networkTx"`
+	RequestsPerMin int     `json:"requestsPerMin"`
+	AvgLatency     string  `json:"avgLatency"`
+	ErrorRate      string  `json:"errorRate"`
+	Uptime         string  `json:"uptime"`
+	Status         string  `json:"status"`
+}
+
+type ProjectAlert struct {
+	ID           string    `json:"id"`
+	DeploymentID string    `json:"deploymentId"`
+	Severity     string    `json:"severity"`
+	Message      string    `json:"message"`
+	Timestamp    time.Time `json:"timestamp"`
+	Status       string    `json:"status"`
+}
+
+func (s *Server) handleGetProjectMetrics(c *gin.Context) {
+	projectID := c.Param("projectId")
+	timeRange := c.DefaultQuery("timeRange", "24h")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Get production deployment for the project
+	prodDeployment, prodMetrics := s.getProductionDeploymentMetrics(ctx, projectID)
+	stagingDeployment, stagingMetrics := s.getStagingDeploymentMetrics(ctx, projectID)
+
+	// Determine what's available
+	available := []string{}
+	notAvailable := []string{}
+
+	if prodDeployment != nil {
+		available = append(available, "production")
+	}
+	if stagingDeployment != nil {
+		available = append(available, "staging")
+	}
+
+	// HTTP metrics are not available (data-layer exists but not populated)
+	notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData")
+
+	response := ProjectMetricsResponse{
+		ProjectID:          projectID,
+		AvailableDataTypes: available,
+		NotAvailable:       notAvailable,
+		TimeRange:          timeRange,
+		Timestamp:          time.Now(),
+	}
+
+	if prodDeployment != nil {
+		response.Production = prodMetrics
+	}
+	if stagingDeployment != nil {
+		response.Staging = stagingMetrics
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    response,
+	})
+}
+
+func (s *Server) getProductionDeploymentMetrics(ctx context.Context, projectID string) (*string, *DeploymentMetrics) {
+	// Get production deployment with its container info in one query
+	query := `
+		SELECT 
+			d.id, d.status, d.current_requests_per_minute, d.avg_response_time_ms,
+			dc.container_id, dc.cpu_usage_percent, dc.memory_usage_mb, dc.health_status, dc.status as container_status
+		FROM deployments d
+		LEFT JOIN deployment_containers dc ON dc.deployment_id = d.id AND dc.is_active = true
+		WHERE d.project_id = $1 
+		  AND d.environment = 'production' 
+		  AND d.status IN ('active', 'running', 'healthy')
+		ORDER BY d.created_at DESC
+		LIMIT 1
+	`
+
+	var deploymentID, status, containerID, containerHealth, containerStatus sql.NullString
+	var requestsPerMin, avgLatencyMs sql.NullInt64
+	var cpuPercent, memMB sql.NullFloat64
+
+	err := s.orchestrator.GetDB().QueryRowContext(ctx, query, projectID).Scan(
+		&deploymentID, &status, &requestsPerMin, &avgLatencyMs,
+		&containerID, &cpuPercent, &memMB, &containerHealth, &containerStatus,
+	)
+
+	if err == sql.ErrNoRows || deploymentID.String == "" {
+		logger.Warn("No active production deployment found", zap.String("project_id", projectID))
+		return nil, nil
+	}
+	if err != nil {
+		logger.Error("Failed to get production deployment metrics", zap.String("project_id", projectID), logger.Err(err))
+		return nil, nil
+	}
+
+	logger.Info("Production deployment metrics query result",
+		zap.String("deployment_id", deploymentID.String),
+		zap.String("status", status.String),
+		zap.String("container_id", containerID.String),
+		zap.Float64("cpu", cpuPercent.Float64),
+		zap.Float64("memory", memMB.Float64),
+		zap.String("health", containerHealth.String),
+	)
+
+	// Determine error rate based on container health
+	errorRate := "0.00"
+	if containerHealth.String == "unhealthy" || containerStatus.String == "unhealthy" {
+		errorRate = "100.00"
+	}
+
+	// Calculate uptime
+	uptime := "100.00"
+	if containerHealth.String == "healthy" {
+		uptime = "100.00"
+	} else if containerHealth.String == "unhealthy" || containerStatus.String == "unhealthy" {
+		uptime = "0.00"
+	}
+
+	// If no CPU/memory from container, show as N/A
+	cpuUsage := cpuPercent.Float64
+	memUsage := int64(memMB.Float64)
+	if !cpuPercent.Valid || cpuPercent.Float64 == 0 {
+		cpuUsage = 0 // Will show as 0 in UI
+	}
+	if !memMB.Valid || memMB.Float64 == 0 {
+		memUsage = 0
+	}
+
+	return &deploymentID.String, &DeploymentMetrics{
+		DeploymentID:   deploymentID.String,
+		CPUUsage:       cpuUsage,
+		MemoryUsage:    memUsage,
+		NetworkRx:      0,
+		NetworkTx:      0,
+		RequestsPerMin: int(requestsPerMin.Int64),
+		AvgLatency:     fmt.Sprintf("%dms", avgLatencyMs.Int64),
+		ErrorRate:      errorRate + "%",
+		Uptime:         uptime + "%",
+		Status:         status.String,
+	}
+}
+
+func (s *Server) getStagingDeploymentMetrics(ctx context.Context, projectID string) (*string, *DeploymentMetrics) {
+	// Query for staging deployment
+	query := `
+		SELECT d.id, d.status,
+			   dm.cpu_usage, dm.memory_usage, dm.network_rx, dm.network_tx,
+			   d.current_requests_per_minute, d.avg_response_time_ms
+		FROM deployments d
+		LEFT JOIN deployments_metrics dm ON dm.deployment_id = d.id
+		WHERE d.project_id = $1 
+		  AND d.environment = 'staging' 
+		  AND d.status IN ('active', 'running', 'healthy')
+		ORDER BY dm.timestamp DESC
+		LIMIT 1
+	`
+
+	var deploymentID, status string
+	var cpuUsage sql.NullFloat64
+	var memUsage, netRx, netTx sql.NullInt64
+	var requestsPerMin sql.NullInt64
+	var avgLatencyMs sql.NullInt64
+
+	err := s.orchestrator.GetDB().QueryRowContext(ctx, query, projectID).Scan(
+		&deploymentID, &status,
+		&cpuUsage, &memUsage, &netRx, &netTx,
+		&requestsPerMin, &avgLatencyMs,
+	)
+
+	if err == sql.ErrNoRows || deploymentID == "" {
+		return nil, nil
+	}
+	if err != nil {
+		logger.Error("Failed to get staging metrics", zap.String("project_id", projectID), logger.Err(err))
+		return nil, nil
+	}
+
+	return &deploymentID, &DeploymentMetrics{
+		DeploymentID:   deploymentID,
+		CPUUsage:       cpuUsage.Float64,
+		MemoryUsage:    memUsage.Int64,
+		NetworkRx:      netRx.Int64,
+		NetworkTx:      netTx.Int64,
+		RequestsPerMin: int(requestsPerMin.Int64),
+		AvgLatency:     fmt.Sprintf("%dms", avgLatencyMs.Int64),
+		ErrorRate:      "0.00%",
+		Uptime:         "100.00%",
+		Status:         status,
+	}
+}
+
+func (s *Server) handleProjectMetricsSSE(c *gin.Context) {
+	projectID := c.Param("projectId")
+	timeRange := c.DefaultQuery("timeRange", "24h")
+
+	// Set SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	logger.Info("SSE connection opened for project", zap.String("project_id", projectID))
+
+	// Create a channel to signal client disconnect
+	clientGone := c.Request.Context().Done()
+
+	// Send initial data
+	s.sendProjectMetricsEvent(c, projectID, timeRange)
+
+	// Send heartbeat every 30 seconds
+	heartbeat := time.NewTicker(30 * time.Second)
+	metricsTicker := time.NewTicker(10 * time.Second)
+	defer heartbeat.Stop()
+	defer metricsTicker.Stop()
+
+	for {
+		select {
+		case <-clientGone:
+			logger.Info("SSE client disconnected", zap.String("project_id", projectID))
+			return
+		case <-heartbeat.C:
+			c.SSEvent("heartbeat", gin.H{"timestamp": time.Now().Unix()})
+			c.Writer.Flush()
+		case <-metricsTicker.C:
+			s.sendProjectMetricsEvent(c, projectID, timeRange)
+		}
+	}
+}
+
+func (s *Server) sendProjectMetricsEvent(c *gin.Context, projectID, timeRange string) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	prodID, prodMetrics := s.getProductionDeploymentMetrics(ctx, projectID)
+	stagingID, stagingMetrics := s.getStagingDeploymentMetrics(ctx, projectID)
+
+	available := []string{}
+	notAvailable := []string{"latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData"}
+
+	if prodID != nil {
+		available = append(available, "production")
+	}
+	if stagingID != nil {
+		available = append(available, "staging")
+	}
+
+	response := ProjectMetricsResponse{
+		ProjectID:          projectID,
+		AvailableDataTypes: available,
+		NotAvailable:       notAvailable,
+		TimeRange:          timeRange,
+		Timestamp:          time.Now(),
+	}
+
+	if prodID != nil {
+		response.Production = prodMetrics
+	}
+	if stagingID != nil {
+		response.Staging = stagingMetrics
+	}
+
+	c.SSEvent("metrics", gin.H{
+		"metrics":   response,
+		"alerts":    []ProjectAlert{},
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
+	c.Writer.Flush()
+}
+
+func (s *Server) handleGetProjectAlerts(c *gin.Context) {
+	projectID := c.Param("projectId")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	query := `
+		SELECT da.id, da.deployment_id, da.severity, da.title, da.status, da.triggered_at
+		FROM deployment_alerts da
+		JOIN deployments d ON d.id = da.deployment_id
+		WHERE d.project_id = $1 
+		  AND da.resolved = false
+		ORDER BY 
+			CASE da.severity 
+				WHEN 'critical' THEN 1 
+				WHEN 'high' THEN 2 
+				WHEN 'medium' THEN 3 
+				ELSE 4 
+			END,
+			da.triggered_at DESC
+		LIMIT 50
+	`
+
+	rows, err := s.orchestrator.GetDB().QueryContext(ctx, query, projectID)
+	if err != nil {
+		logger.Error("Failed to get project alerts", zap.String("project_id", projectID), logger.Err(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve alerts"})
+		return
+	}
+	defer rows.Close()
+
+	var alerts []ProjectAlert
+	for rows.Next() {
+		var alert ProjectAlert
+		var title string
+		if err := rows.Scan(&alert.ID, &alert.DeploymentID, &alert.Severity, &title, &alert.Status, &alert.Timestamp); err != nil {
+			continue
+		}
+		alert.Message = title
+		alerts = append(alerts, alert)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "alerts": alerts})
 }

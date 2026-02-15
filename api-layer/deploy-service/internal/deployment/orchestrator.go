@@ -866,7 +866,9 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 
 	containerConfig := &container.Config{
 		Image: job.ImageTag,
-		User:  "1000:1000",
+		// Note: User is intentionally not set here to allow the image's
+		// configured user (e.g., "nextjs" in Next.js images) to be used.
+		// This ensures proper file permissions for application files.
 		ExposedPorts: nat.PortSet{
 			nat.Port(fmt.Sprintf("%d/tcp", appPort)): struct{}{},
 		},

@@ -78,35 +78,36 @@ func GetDefaultDeploymentConfig(planTier string, environment string) DeploymentS
 		},
 	}
 
-	// Adjust resources based on plan tier
+	// Adjust resources based on plan tier (matches subscription_plans table)
+	// Next.js minimum: 512MB memory, 0.25 CPU recommended
 	switch planTier {
 	case "starter":
-		baseConfig.CPUQuota = 100000
-		baseConfig.MemoryLimit = 536870912 // 512MB
-		baseConfig.PidsLimit = 512         // INCREASED from 128
-		baseConfig.StorageLimit = 5 * units.GiB
-		baseConfig.AllowedPorts = []int{8080}
+		baseConfig.CPUQuota = 500000        // 0.5 CPU - matches subscription
+		baseConfig.MemoryLimit = 1073741824 // 1GB - matches subscription
+		baseConfig.PidsLimit = 512
+		baseConfig.StorageLimit = 10 * units.GiB
+		baseConfig.AllowedPorts = []int{8080, 8443, 3000}
 
 	case "team":
-		baseConfig.CPUQuota = 200000
-		baseConfig.MemoryLimit = 1073741824 // 1GB
-		baseConfig.PidsLimit = 1024         // INCREASED from 256
-		baseConfig.StorageLimit = 20 * units.GiB
-		baseConfig.AllowedPorts = []int{8080, 8443}
+		baseConfig.CPUQuota = 1000000       // 1.0 CPU - matches subscription
+		baseConfig.MemoryLimit = 2147483648 // 2GB - matches subscription
+		baseConfig.PidsLimit = 1024
+		baseConfig.StorageLimit = 25 * units.GiB
+		baseConfig.AllowedPorts = []int{8080, 8443, 3000}
 
 	case "business":
-		baseConfig.CPUQuota = 400000
-		baseConfig.MemoryLimit = 2147483648 // 2GB
-		baseConfig.PidsLimit = 2048         // INCREASED from 512
+		baseConfig.CPUQuota = 2000000       // 2.0 CPU - matches subscription
+		baseConfig.MemoryLimit = 4294967296 // 4GB - matches subscription
+		baseConfig.PidsLimit = 2048
 		baseConfig.StorageLimit = 50 * units.GiB
-		baseConfig.AllowedPorts = []int{8080, 8443, 9090}
+		baseConfig.AllowedPorts = []int{8080, 8443, 3000, 9090}
 
 	case "enterprise":
-		baseConfig.CPUQuota = 800000
-		baseConfig.MemoryLimit = 4294967296 // 4GB
-		baseConfig.PidsLimit = 4096         // INCREASED from 1024
+		baseConfig.CPUQuota = 4000000       // 4.0 CPU - matches subscription
+		baseConfig.MemoryLimit = 8589934592 // 8GB - matches subscription
+		baseConfig.PidsLimit = 4096
 		baseConfig.StorageLimit = 100 * units.GiB
-		baseConfig.AllowedPorts = []int{8080, 8443, 9090, 3000}
+		baseConfig.AllowedPorts = []int{8080, 8443, 3000, 3001}
 
 	default:
 		return GetDefaultDeploymentConfig("starter", environment)

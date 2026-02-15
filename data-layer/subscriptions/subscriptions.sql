@@ -286,63 +286,83 @@ CREATE TRIGGER log_subscription_changes_trigger
     FOR EACH ROW EXECUTE FUNCTION log_subscription_changes();
 
     INSERT INTO subscription_plans (
-    id,
-    name,
-    price_monthly,
-    max_users,
-    max_projects,
-    max_deployments_per_month,
-    max_apps,
-    storage_gb,
-    description,
-    is_active
-) VALUES
-(
-    'starter',
-    'Starter',
-    79.00,
-    8,
-    5,
-    100,
-    5,
-    10,
-    'Perfect for small teams starting with DevOps automation',
-    TRUE
-),
-(
-    'team',
-    'Team',
-    299.00,
-    25,
-    15,
-    500,
-    10,
-    50,
-    'For growing teams with multiple projects',
-    TRUE
-),
-(
-    'business',
-    'Business',
-    799.00,
-    50,
-    30,
-    1000,
-    25,
-    3072, -- 3 TB
-    'For established SMEs with complex needs',
-    TRUE
-),
-(
-    'enterprise',
-    'Enterprise',
-    2199.00,
-    NULL, -- unlimited users
-    NULL, -- unlimited projects
-    NULL, -- unlimited deployments
-    NULL, -- unlimited apps
-    5120, -- 5 TB
-    'Custom limits for large organizations',
-    TRUE
-);
+        id, name, price_monthly, price_annually, description, is_active, display_order,
+        max_users, max_projects,
+        max_builds_per_hour, max_builds_per_day, max_builds_per_month, max_concurrent_builds,
+        max_build_duration_minutes, max_build_size_mb,
+        cpu_cores_per_build, memory_gb_per_build,
+        max_deployments_per_month, max_concurrent_deployments, max_environments_per_project, max_preview_environments, rollback_retention_count,
+        cpu_cores_per_deployment, memory_gb_per_deployment,
+        storage_gb, max_build_artifacts_gb, max_database_storage_gb, max_logs_retention_days, max_backup_retention_days,
+        bandwidth_gb_per_month, requests_per_minute, ddos_protection_enabled,
+        max_webhooks_per_project, max_api_keys_per_project, max_custom_domains,
+        ssl_certificates_included, advanced_analytics_enabled, audit_logs_enabled, audit_logs_retention_days,
+        support_level, sla_uptime_percentage, support_response_hours,
+        custom_runtime_configs_enabled, kubernetes_deployment_enabled, multi_region_enabled, white_label_enabled,
+        stripe_product_id, stripe_price_id
+    ) VALUES
+    (
+        'starter', 'Starter', 79.00, 672.00, 'Perfect for small teams starting with DevOps automation', true, 1,
+        8, 3,
+        5, 20, 100, 1,
+        10, 100,
+        1.0, 2,
+        100, 1, 3, 5, 10,
+        0.5, 1,
+        10, 5, 5, 7, 30,
+        50, 100, false,
+        3, 2, 0,
+        true, false, false, null,
+        'community', null, 48,
+        false, false, false, false,
+        'prod_Tn931qNXGE6cFR', 'price_1SpYlrGgfQA1ic0eJ4s3kBQ7'
+    ),
+    (
+        'team', 'Team', 299.00, 2978.00, 'For growing teams with multiple projects', true, 2,
+        25, 10,
+        15, 20, 100, 3,
+        30, 500,
+        4.0, 8,
+        500, 3, 5, 20, 30,
+        1.0, 2,
+        50, 30, 20, 30, 60,
+        500, 500, true,
+        10, 5, 5,
+        true, true, true, 30,
+        'email', 99.50, 24,
+        true, false, false, false,
+        'prod_Tn94qF9TzLHb0A', 'price_1SpYmYGgfQA1ic0eSUBpvRDr'
+    ),
+    (
+        'business', 'Business', 799.00, 7963.00, 'For established SMEs with complex needs', true, 3,
+        50, 25,
+        30, 100, 1000, 10,
+        60, 2000,
+        8.0, 16,
+        1000, 10, 50, 60, 60,
+        2.0, 4,
+        3072, 100, 100, 90, 90,
+        1000, 1000, true,
+        50, 20, null,
+        true, true, true, 90,
+        'priority', 99.90, 4,
+        true, true, true, false,
+        'prod_TnpGy7ijqcyTEU', 'price_1SqDcRGgfQA1ic0eX52XYaG8'
+    ),
+    (
+        'enterprise', 'Enterprise', 2199.00, null, 'Custom limits for large organizations', true, 4,
+        null, null,
+        20, 120, 5000, 16,
+        null, 5000,
+        16.0, 32,
+        null, 10, 4, 100, 100,
+        4.0, 8,
+        5120, 500, 500, 365, 365,
+        null, 2000, true,
+        30, null, null,
+        true, true, true, 365,
+        'dedicated', 99.99, 1,
+        true, true, true, true,
+        'prod_TnpHZrGHwmNhhZ', 'price_1SqDcvGgfQA1ic0ewaEBlBG7'
+    );
 

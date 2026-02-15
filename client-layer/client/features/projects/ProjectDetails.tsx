@@ -1570,7 +1570,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                     </div>
                 )}
 
-                {activeTab === 'monitoring' && <MonitoringDashboard projectData={projectData} alerts={alerts} onResolveAlert={handleResolveAlert} resolvingAlerts={resolvingAlerts} />}
+                {activeTab === 'monitoring' && <MonitoringDashboard projectData={projectData} alerts={alerts} onResolveAlert={handleResolveAlert} resolvingAlerts={resolvingAlerts} accessToken={accessToken} projectId={projectData.id} />}
 
                 {activeTab === 'settings' && <DeploymentSettings projectId={projectData.id} accessToken={accessToken} settings={projectData.settings} />}
                 {showBuildLogs && selectedBuild && (

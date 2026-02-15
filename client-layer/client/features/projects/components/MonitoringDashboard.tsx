@@ -1,14 +1,46 @@
 'use client'
-import React, { useEffect, useRef, useState, useMemo } from 'react'
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import * as d3 from 'd3'
-import { Activity, TrendingUp, Zap, AlertCircle, Clock, Globe, Cpu, Database, Server, Layers, ArrowUp, ArrowDown, Minus, Check, X } from 'lucide-react'
-import { ProjectData, Alert } from '../Types/ProjectTypes'
+import { Activity, TrendingUp, Zap, AlertCircle, Clock, Globe, Cpu, Database, Server, Layers, ArrowUp, ArrowDown, Minus, Check, X, Wifi, WifiOff } from 'lucide-react'
+import { ProjectData, Alert as ProjectAlert } from '../Types/ProjectTypes'
+import axios from 'axios'
 
 interface MonitoringProps {
     projectData: ProjectData
-    alerts: Alert[]
+    alerts: ProjectAlert[]
     onResolveAlert: (alertId: string) => void
     resolvingAlerts: Set<string>
+    accessToken: string
+    projectId: string
+}
+
+interface MetricData {
+    projectId: string
+    production?: DeploymentMetrics
+    staging?: DeploymentMetrics
+    availableDataTypes: string[]
+    notAvailable: string[]
+    timeRange: string
+    timestamp: string
+    timeSeriesData?: { time: number; value: number }[]
+    latencyDistribution?: { bucket: string; count: number }[]
+    statusCodes?: { code: string; count: number; label: string }[]
+    endpoints?: { endpoint: string; requests: number; avgLatency: number; errorRate: string }[]
+    geographicData?: { region: string; requests: number; percentage: number }[]
+    heatmapData?: { day: number; hour: number; value: number }[]
+}
+
+interface DeploymentMetrics {
+    deploymentId: string
+    cpuUsage: number
+    memoryUsage: number
+    networkRx: number
+    networkTx: number
+    requestsPerMin: number
+    avgLatency: string
+    errorRate: string
+    uptime: string
+    status: string
 }
 
 interface MetricCard {
@@ -771,38 +803,201 @@ const TimeRangeSelector: React.FC<{
     )
 }
 
-const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts, onResolveAlert, resolvingAlerts }) => {
+const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: propAlerts, onResolveAlert, resolvingAlerts, accessToken, projectId }) => {
     const [timeRange, setTimeRange] = useState('24h')
     const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'errors' | 'infrastructure'>('overview')
+    const [metricData, setMetricData] = useState<MetricData | null>(null)
+    const [alerts, setAlerts] = useState<ProjectAlert[]>(propAlerts)
+    const [isConnected, setIsConnected] = useState(false)
+    const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+    const eventSourceRef = useRef<EventSource | null>(null)
+    const [isLoading, setIsLoading] = useState(true)
 
-    // Generate sample data based on time range
+    const fetchInitialMetrics = useCallback(async () => {
+        setIsLoading(true)
+        try {
+            const monitoringUrl = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost:5110'
+            const response = await axios.get<{ data: { metrics: any } }>(
+                `${monitoringUrl}/api/projects/${projectId}/metrics?timeRange=${timeRange}`
+            )
+            if (response.data?.data?.metrics) {
+                setMetricData(response.data.data.metrics)
+            }
+        } catch (error) {
+            console.error('Failed to fetch initial metrics:', error)
+        } finally {
+            setIsLoading(false)
+        }
+    }, [projectId, timeRange])
+
+    useEffect(() => {
+        fetchInitialMetrics()
+    }, [fetchInitialMetrics])
+
+    useEffect(() => {
+        console.log(process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL)
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close()
+        }
+
+        const monitoringUrl = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost:5110'
+        const eventSource = new EventSource(`${monitoringUrl}/api/projects/${projectId}/metrics/sse?timeRange=${timeRange}`)
+        eventSourceRef.current = eventSource
+
+        eventSource.onopen = () => {
+            setIsConnected(true)
+            console.log('SSE connected')
+        }
+
+        eventSource.addEventListener('connected', (event) => {
+            console.log('SSE connected event:', event)
+            setIsConnected(true)
+        })
+
+        eventSource.addEventListener('metrics', (event) => {
+            try {
+                const data = JSON.parse(event.data)
+                if (data.metrics) {
+                    setMetricData(data.metrics)
+                    if (data.alerts) {
+                        setAlerts(data.alerts.map((a: any) => ({
+                            id: a.id,
+                            type: a.metricType || 'metric',
+                            message: a.message,
+                            severity: a.severity as 'low' | 'medium' | 'high' | 'critical',
+                            timestamp: a.timestamp,
+                            resolved: a.status === 'resolved'
+                        })))
+                    }
+                    setLastUpdate(new Date())
+                }
+            } catch (error) {
+                console.error('Failed to parse metrics:', error)
+            }
+        })
+
+        eventSource.addEventListener('heartbeat', () => {
+            setLastUpdate(new Date())
+        })
+
+        eventSource.addEventListener('error', (event) => {
+            console.error('SSE error:', event)
+            setIsConnected(false)
+        })
+
+        eventSource.onerror = () => {
+            setIsConnected(false)
+            eventSource.close()
+        }
+
+        return () => {
+            eventSource.close()
+            setIsConnected(false)
+        }
+    }, [projectId, timeRange])
+
+    const handleResolveAlert = async (alertId: string) => {
+        try {
+            const monitoringUrl = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost:5110'
+            await axios.post(`${monitoringUrl}/api/alerts/${alertId}/resolve/${accessToken}`)
+            setAlerts(prev => prev.filter(a => a.id !== alertId))
+            onResolveAlert(alertId)
+        } catch (error) {
+            console.error('Failed to resolve alert:', error)
+        }
+    }
+
+    const productionMetrics = metricData?.production
+
+    const generateMockTimeSeries = useCallback((points: number, min: number, max: number) => {
+        const data = []
+        let value = (min + max) / 2
+        const now = Date.now()
+        
+        for (let i = points; i >= 0; i--) {
+            const time = now - i * 60000
+            const change = (Math.random() - 0.5) * 0.15 * value
+            value = Math.max(min, Math.min(max, value + change))
+            data.push({ time, value: Math.round(value * 100) / 100 })
+        }
+        return data
+    }, [])
+
     const requestsData = useMemo(() => {
         const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateTimeSeriesData(points, 50, 300, 0.15)
-    }, [timeRange])
+        return generateMockTimeSeries(points, 50, 300)
+    }, [timeRange, generateMockTimeSeries])
 
     const responseTimeData = useMemo(() => {
         const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateTimeSeriesData(points, 20, 150, 0.1)
-    }, [timeRange])
+        return generateMockTimeSeries(points, 20, 150)
+    }, [timeRange, generateMockTimeSeries])
 
     const cpuData = useMemo(() => {
         const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateTimeSeriesData(points, 10, 80, 0.08)
-    }, [timeRange])
+        return generateMockTimeSeries(points, 10, 80)
+    }, [timeRange, generateMockTimeSeries])
 
     const memoryData = useMemo(() => {
         const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateTimeSeriesData(points, 30, 90, 0.05)
-    }, [timeRange])
+        return generateMockTimeSeries(points, 30, 90)
+    }, [timeRange, generateMockTimeSeries])
 
-    const latencyData = useMemo(() => generateLatencyData(), [timeRange])
-    const statusCodesData = useMemo(() => generateStatusCodesData(), [timeRange])
-    const endpointsData = useMemo(() => generateEndpointsData(), [timeRange])
-    const geographicData = useMemo(() => generateGeographicData(), [timeRange])
-    const errorTypesData = useMemo(() => generateErrorTypesData(), [timeRange])
+    const latencyData = useMemo(() => {
+        if (metricData?.notAvailable?.includes('latencyDistribution')) {
+            return [{ bucket: 'Data not available', count: 0 }]
+        }
+        return [{ bucket: '0-50ms', count: 450 }, { bucket: '50-100ms', count: 320 }, { bucket: '100-200ms', count: 180 }, { bucket: '200-500ms', count: 80 }, { bucket: '500ms-1s', count: 30 }, { bucket: '>1s', count: 15 }]
+    }, [metricData?.notAvailable])
 
-    const heatmapData = useMemo(() => {
+    const statusCodesData = useMemo(() => {
+        if (metricData?.notAvailable?.includes('statusCodes')) {
+            return [{ code: 'N/A', count: 0, label: 'Data not available' }]
+        }
+        return [
+            { code: '200', count: 1250, label: 'OK' },
+            { code: '201', count: 320, label: 'Created' },
+            { code: '301', count: 85, label: 'Moved' },
+            { code: '304', count: 180, label: 'Not Modified' },
+            { code: '400', count: 45, label: 'Bad Request' },
+            { code: '401', count: 23, label: 'Unauthorized' },
+            { code: '404', count: 67, label: 'Not Found' },
+            { code: '500', count: 12, label: 'Server Error' }
+        ]
+    }, [metricData?.notAvailable])
+
+    const endpointsData = useMemo(() => {
+        if (metricData?.notAvailable?.includes('endpoints')) {
+            return [{ endpoint: 'No endpoint data available', requests: 0, avgLatency: 0, errorRate: '0' }]
+        }
+        return [
+            { endpoint: '/api/users', requests: 1250, avgLatency: 45, errorRate: '0.1' },
+            { endpoint: '/api/projects', requests: 890, avgLatency: 67, errorRate: '0.2' },
+            { endpoint: '/api/builds', requests: 650, avgLatency: 123, errorRate: '0.5' },
+            { endpoint: '/api/deployments', requests: 430, avgLatency: 89, errorRate: '0.3' },
+            { endpoint: '/health', requests: 2150, avgLatency: 12, errorRate: '0' },
+            { endpoint: '/api/auth/login', requests: 340, avgLatency: 156, errorRate: '2.1' }
+        ]
+    }, [metricData?.notAvailable])
+
+    const geographicDataMemo = useMemo(() => {
+        if (metricData?.notAvailable?.includes('geographicData')) {
+            return [{ region: 'No geographic data available', requests: 0, percentage: 0 }]
+        }
+        return [
+            { region: 'US East', requests: 2340, percentage: 42 },
+            { region: 'Europe', requests: 1680, percentage: 30 },
+            { region: 'Asia Pacific', requests: 890, percentage: 16 },
+            { region: 'US West', requests: 340, percentage: 6 },
+            { region: 'South America', requests: 230, percentage: 4 },
+            { region: 'Other', requests: 120, percentage: 2 }
+        ]
+    }, [metricData?.notAvailable])
+
+    const heatmapDataMemo = useMemo(() => {
+        if (metricData?.notAvailable?.includes('heatmapData')) {
+            return []
+        }
         const data = []
         for (let day = 0; day < 7; day++) {
             for (let hour = 0; hour < 24; hour++) {
@@ -814,22 +1009,88 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts, o
             }
         }
         return data
-    }, [])
+    }, [metricData?.notAvailable])
 
-    const metricCards: MetricCard[] = [
-        { label: 'Requests/min', value: projectData.metrics.requestsPerMinute?.toString() || '156', change: 12.5, icon: TrendingUp, color: 'text-blue-500' },
-        { label: 'Response Time', value: projectData.metrics.avgResponseTime || '67ms', change: -8.2, icon: Clock, color: 'text-green-500' },
-        { label: 'Error Rate', value: projectData.metrics.errorRate || '0.23%', change: -15.3, icon: AlertCircle, color: 'text-red-500' },
-        { label: 'Uptime', value: projectData.metrics.uptime || '99.98%', change: 0, icon: Activity, color: 'text-purple-500' }
-    ]
+    const metricCards: MetricCard[] = useMemo(() => [
+        { label: 'Requests/min', value: productionMetrics?.requestsPerMin?.toString() || 'N/A', change: 0, icon: TrendingUp, color: 'text-blue-500' },
+        { label: 'Response Time', value: productionMetrics?.avgLatency || 'N/A', change: 0, icon: Clock, color: 'text-green-500' },
+        { label: 'Error Rate', value: productionMetrics?.errorRate || 'N/A', change: 0, icon: AlertCircle, color: 'text-red-500' },
+        { label: 'Uptime', value: productionMetrics?.uptime || 'N/A', change: 0, icon: Activity, color: 'text-purple-500' }
+    ], [productionMetrics])
+
+    const errorTypesData = useMemo(() => [
+        { type: 'Database Timeout', count: 23, severity: 'high' },
+        { type: 'Connection Refused', count: 15, severity: 'medium' },
+        { type: 'Validation Error', count: 45, severity: 'low' },
+        { type: 'Rate Limit', count: 8, severity: 'medium' },
+        { type: 'Memory Limit', count: 3, severity: 'critical' }
+    ], [])
+
+    const geographicData = useMemo(() => {
+        if (geographicDataMemo.length > 0) return geographicDataMemo
+        return [
+            { region: 'US East', requests: 2340, percentage: 42 },
+            { region: 'Europe', requests: 1680, percentage: 30 },
+            { region: 'Asia Pacific', requests: 890, percentage: 16 },
+            { region: 'US West', requests: 340, percentage: 6 },
+            { region: 'South America', requests: 230, percentage: 4 },
+            { region: 'Other', requests: 120, percentage: 2 }
+        ]
+    }, [geographicDataMemo])
+
+    const heatmapData = useMemo(() => {
+        if (heatmapDataMemo.length > 0) return heatmapDataMemo
+        const data = []
+        for (let day = 0; day < 7; day++) {
+            for (let hour = 0; hour < 24; hour++) {
+                data.push({
+                    day,
+                    hour,
+                    value: Math.floor(Math.random() * 100) + 20
+                })
+            }
+        }
+        return data
+    }, [heatmapDataMemo])
+
+    if (isLoading && !metricData) {
+        return (
+            <div className="flex h-96 items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent"></div>
+                    <p className="text-sm text-zinc-400">Loading metrics...</p>
+                </div>
+            </div>
+        )
+    }
 
     return (
         <div className="space-y-6">
             {/* Header */}
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div>
-                    <h2 className="text-xl font-semibold text-white">Monitoring Dashboard</h2>
-                    <p className="text-sm text-zinc-400">Real-time observability and performance metrics</p>
+                <div className="flex items-center gap-4">
+                    <div>
+                        <h2 className="text-xl font-semibold text-white">Monitoring Dashboard</h2>
+                        <p className="text-sm text-zinc-400">Real-time observability and performance metrics</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {isConnected ? (
+                            <div className="flex items-center gap-1.5 rounded-full bg-green-500/10 px-3 py-1">
+                                <Wifi size={14} className="text-green-500" />
+                                <span className="text-xs font-medium text-green-500">Live</span>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-1.5 rounded-full bg-red-500/10 px-3 py-1">
+                                <WifiOff size={14} className="text-red-500" />
+                                <span className="text-xs font-medium text-red-500">Disconnected</span>
+                            </div>
+                        )}
+                        {lastUpdate && (
+                            <span className="text-xs text-zinc-500">
+                                Updated {lastUpdate.toLocaleTimeString()}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <TimeRangeSelector selected={timeRange} onChange={setTimeRange} />
             </div>
@@ -931,7 +1192,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts, o
                                                     {alert.severity}
                                                 </span>
                                                 <button
-                                                    onClick={() => onResolveAlert(alert.id)}
+                                                    onClick={() => handleResolveAlert(alert.id)}
                                                     disabled={resolvingAlerts.has(alert.id)}
                                                     className="flex items-center gap-1.5 rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 transition-all hover:bg-green-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                                                 >
@@ -948,7 +1209,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts, o
                                                     )}
                                                 </button>
                                                 <button
-                                                    onClick={() => onResolveAlert(alert.id)}
+                                                    onClick={() => handleResolveAlert(alert.id)}
                                                     disabled={resolvingAlerts.has(alert.id)}
                                                     className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 p-1.5 text-zinc-400 transition-all hover:bg-zinc-800 hover:text-white disabled:opacity-50"
                                                     title="Dismiss"
@@ -1017,7 +1278,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts, o
                                         </div>
                                         <div className="text-right">
                                             <div className="text-sm font-medium text-zinc-300">{endpoint.avgLatency}ms</div>
-                                            <div className={`text-xs ${endpoint.errorRate > 1 ? 'text-red-400' : 'text-green-400'}`}>
+                                            <div className={`text-xs ${parseFloat(endpoint.errorRate) > 1 ? 'text-red-400' : 'text-green-400'}`}>
                                                 {endpoint.errorRate}% errors
                                             </div>
                                         </div>
@@ -1116,7 +1377,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts, o
                                         <td className="px-5 py-3 text-right text-sm text-zinc-300">{endpoint.avgLatency}ms</td>
                                         <td className="px-5 py-3 text-right text-sm text-zinc-300">{Math.round(endpoint.avgLatency * 2.5)}ms</td>
                                         <td className="px-5 py-3 text-right">
-                                            <span className={`text-sm ${endpoint.errorRate > 1 ? 'text-red-400' : endpoint.errorRate > 0.5 ? 'text-yellow-400' : 'text-green-400'}`}>
+                                            <span className={`text-sm ${parseFloat(endpoint.errorRate) > 1 ? 'text-red-400' : parseFloat(endpoint.errorRate) > 0.5 ? 'text-yellow-400' : 'text-green-400'}`}>
                                                 {endpoint.errorRate}%
                                             </span>
                                         </td>
