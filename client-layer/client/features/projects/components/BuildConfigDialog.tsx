@@ -69,7 +69,7 @@ const BuildConfigDialog: React.FC<BuildConfigDialogProps> = ({ accessToken, proj
             if (!repoInfo) return
             
             try {
-                const installationResp = await axios.get(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/installations/${accessToken}`)
+                const installationResp = await axios.get<{ installations: any[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/installations/${accessToken}`)
                 const installations = installationResp.data.installations
                 
                 if (!installations || installations.length === 0) {
@@ -78,7 +78,7 @@ const BuildConfigDialog: React.FC<BuildConfigDialogProps> = ({ accessToken, proj
                 }
 
                 const installation = installations[0]
-                const resp = await axios.get(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/repository-branches/${accessToken}/${repoInfo.repo}/${repoInfo.owner}/${installation.installation_id}`)
+                const resp = await axios.get<{ success: boolean; branches: Branch[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/repository-branches/${accessToken}/${repoInfo.repo}/${repoInfo.owner}/${installation.installation_id}`)
                 
                 if (resp.data.success) {
                     setBranches(resp.data.branches)
@@ -103,7 +103,7 @@ const BuildConfigDialog: React.FC<BuildConfigDialogProps> = ({ accessToken, proj
             
             setIsLoadingCommits(true)
             try {
-                const installationResp = await axios.get(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/installations/${accessToken}`)
+                const installationResp = await axios.get<{ installations: any[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/installations/${accessToken}`)
                 const installations = installationResp.data.installations
                 
                 if (!installations || installations.length === 0) {
@@ -112,7 +112,7 @@ const BuildConfigDialog: React.FC<BuildConfigDialogProps> = ({ accessToken, proj
                 }
 
                 const installation = installations[0]
-                const resp = await axios.get(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/repository-commits/${accessToken}/${repoInfo.repo}/${repoInfo.owner}/${installation.installation_id}/${selectedBranch}`)
+                const resp = await axios.get<{ success: boolean; commits: any[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/github/repository-commits/${accessToken}/${repoInfo.repo}/${repoInfo.owner}/${installation.installation_id}/${selectedBranch}`)
                 
                 if (resp.data.success) {
                     setCommits(resp.data.commits)

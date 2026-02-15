@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 
+	"monitoring-service/internal/httpmetrics"
 	"monitoring-service/internal/metrics"
 	"monitoring-service/pkg/config"
 	"monitoring-service/pkg/db"
@@ -26,6 +27,7 @@ type Orchestrator struct {
 	alertManager  *AlertManager
 	uptimeTracker *UptimeTracker
 	metricsCol    *metrics.Collector
+	traefikCol    *httpmetrics.TraefikCollector
 }
 
 func NewOrchestrator(cfg *config.Config, dbConn *sql.DB, redisClient *db.RedisClient, minioClient *minio.Client) *Orchestrator {
@@ -52,6 +54,10 @@ func NewOrchestrator(cfg *config.Config, dbConn *sql.DB, redisClient *db.RedisCl
 	o.alertManager = NewAlertManager(o)
 	o.uptimeTracker = NewUptimeTracker(o)
 	o.metricsCol = metrics.NewCollector(o.dockerClient, dbConn, redisClient)
+
+	// Initialize Traefik HTTP metrics collector
+	traefikLogPath := "/var/log/traefik"
+	o.traefikCol = httpmetrics.NewTraefikCollector(dbConn, redisClient, traefikLogPath)
 
 	return o
 }
@@ -106,6 +112,11 @@ func (o *Orchestrator) GetMetricsCollector() *metrics.Collector {
 	return o.metricsCol
 }
 
+// GetTraefikCollector returns Traefik collector
+func (o *Orchestrator) GetTraefikCollector() *httpmetrics.TraefikCollector {
+	return o.traefikCol
+}
+
 // GetConfig returns config
 func (o *Orchestrator) GetConfig() *config.Config {
 	return o.config
@@ -151,6 +162,18 @@ func (o *Orchestrator) RunUptimeTracking(ctx context.Context) error {
 func (o *Orchestrator) RunAlertProcessing(ctx context.Context) error {
 	if err := o.alertManager.ProcessAlerts(ctx); err != nil {
 		logger.Error("Error processing alerts", logger.Err(err))
+		return err
+	}
+	return nil
+}
+
+// RunHTTPMetricsCollection collects HTTP metrics from Traefik
+func (o *Orchestrator) RunHTTPMetricsCollection(ctx context.Context) error {
+	if o.traefikCol == nil {
+		return nil
+	}
+	if err := o.traefikCol.Start(ctx); err != nil {
+		logger.Error("Error starting Traefik collector", logger.Err(err))
 		return err
 	}
 	return nil

@@ -4,6 +4,7 @@ import * as d3 from 'd3'
 import { Activity, TrendingUp, Zap, AlertCircle, Clock, Globe, Cpu, Database, Server, Layers, ArrowUp, ArrowDown, Minus, Check, X, Wifi, WifiOff } from 'lucide-react'
 import { ProjectData, Alert as ProjectAlert } from '../Types/ProjectTypes'
 import axios from 'axios'
+import { useProjectMetricsUpdates } from '@/hooks/useProjectMetrics'
 
 interface MonitoringProps {
     projectData: ProjectData
@@ -14,6 +15,12 @@ interface MonitoringProps {
     projectId: string
 }
 
+interface TimeSeriesPoint {
+    time: number
+    cpuUsage: number
+    memoryUsage: number
+}
+
 interface MetricData {
     projectId: string
     production?: DeploymentMetrics
@@ -22,12 +29,14 @@ interface MetricData {
     notAvailable: string[]
     timeRange: string
     timestamp: string
-    timeSeriesData?: { time: number; value: number }[]
+    timeSeriesData?: TimeSeriesPoint[]
     latencyDistribution?: { bucket: string; count: number }[]
     statusCodes?: { code: string; count: number; label: string }[]
-    endpoints?: { endpoint: string; requests: number; avgLatency: number; errorRate: string }[]
+    endpoints?: { path?: string; endpoint?: string; requestCount?: number; requests?: number; avgLatency: number; errorRate: string; method?: string }[]
     geographicData?: { region: string; requests: number; percentage: number }[]
     heatmapData?: { day: number; hour: number; value: number }[]
+    errorTypes?: { type: string; count: number; severity: string }[]
+    requestsData?: { time: number; requestsPerMin: number; avgLatency: number; errorRate: number }[]
 }
 
 interface DeploymentMetrics {
@@ -76,69 +85,22 @@ const Tooltip: React.FC<{
     )
 }
 
-const generateTimeSeriesData = (points: number, min: number, max: number, volatility: number = 0.1) => {
-    const data = []
-    let value = (min + max) / 2
-    const now = Date.now()
-    
-    for (let i = points; i >= 0; i--) {
-        const time = now - i * 60000
-        const change = (Math.random() - 0.5) * volatility * value
-        value = Math.max(min, Math.min(max, value + change))
-        data.push({ time, value: Math.round(value * 100) / 100 })
-    }
-    return data
-}
-
-const generateLatencyData = () => {
-    const buckets = ['0-50ms', '50-100ms', '100-200ms', '200-500ms', '500ms-1s', '>1s']
-    const counts = [450, 320, 180, 80, 30, 15]
-    return buckets.map((bucket, i) => ({ bucket, count: counts[i] }))
-}
-
-const generateStatusCodesData = () => {
-    return [
-        { code: '200', count: 1250, label: 'OK' },
-        { code: '201', count: 320, label: 'Created' },
-        { code: '301', count: 85, label: 'Moved' },
-        { code: '304', count: 180, label: 'Not Modified' },
-        { code: '400', count: 45, label: 'Bad Request' },
-        { code: '401', count: 23, label: 'Unauthorized' },
-        { code: '404', count: 67, label: 'Not Found' },
-        { code: '500', count: 12, label: 'Server Error' }
-    ]
-}
-
-const generateEndpointsData = () => {
-    return [
-        { endpoint: '/api/users', requests: 1250, avgLatency: 45, errorRate: 0.1 },
-        { endpoint: '/api/projects', requests: 890, avgLatency: 67, errorRate: 0.2 },
-        { endpoint: '/api/builds', requests: 650, avgLatency: 123, errorRate: 0.5 },
-        { endpoint: '/api/deployments', requests: 430, avgLatency: 89, errorRate: 0.3 },
-        { endpoint: '/health', requests: 2150, avgLatency: 12, errorRate: 0 },
-        { endpoint: '/api/auth/login', requests: 340, avgLatency: 156, errorRate: 2.1 }
-    ]
-}
-
-const generateGeographicData = () => {
-    return [
-        { region: 'US East', requests: 2340, percentage: 42 },
-        { region: 'Europe', requests: 1680, percentage: 30 },
-        { region: 'Asia Pacific', requests: 890, percentage: 16 },
-        { region: 'US West', requests: 340, percentage: 6 },
-        { region: 'South America', requests: 230, percentage: 4 },
-        { region: 'Other', requests: 120, percentage: 2 }
-    ]
-}
-
-const generateErrorTypesData = () => {
-    return [
-        { type: 'Database Timeout', count: 23, severity: 'high' },
-        { type: 'Connection Refused', count: 15, severity: 'medium' },
-        { type: 'Validation Error', count: 45, severity: 'low' },
-        { type: 'Rate Limit', count: 8, severity: 'medium' },
-        { type: 'Memory Limit', count: 3, severity: 'critical' }
-    ]
+const DataUnavailable: React.FC<{ error?: boolean; message?: string }> = ({ error, message }) => {
+    return (
+        <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 rounded-lg border border-zinc-800 bg-[#1b1b1b]">
+            {error ? (
+                <>
+                    <AlertCircle className="text-red-500" size={32} />
+                    <span className="text-sm text-red-400">{message || 'Data error'}</span>
+                </>
+            ) : (
+                <>
+                    <Database className="text-zinc-600" size={32} />
+                    <span className="text-sm text-zinc-500">{message || 'Data unavailable'}</span>
+                </>
+            )}
+        </div>
+    )
 }
 
 const LineChart: React.FC<{
@@ -166,7 +128,11 @@ const LineChart: React.FC<{
     }, [height])
 
     useEffect(() => {
-        if (!svgRef.current || data.length === 0) return
+        if (!svgRef.current) return
+        if (data.length === 0) {
+            d3.select(svgRef.current).selectAll('*').remove()
+            return
+        }
 
         const svg = d3.select(svgRef.current)
         svg.selectAll('*').remove()
@@ -270,7 +236,7 @@ const LineChart: React.FC<{
 
         // Y Axis
         const yAxis = g.append('g')
-            .call(d3.axisLeft(yScale).ticks(5))
+            .call(d3.axisLeft(yScale).ticks(5).tickFormat(d => valueFormatter(d as number)))
         yAxis.selectAll('text')
             .attr('fill', '#71717a')
             .attr('font-size', '11px')
@@ -348,6 +314,10 @@ const LineChart: React.FC<{
 
     }, [data, dimensions, color, showArea])
 
+    if (data.length === 0) {
+        return <DataUnavailable />
+    }
+
     return (
         <>
             <div ref={containerRef} className="w-full">
@@ -388,6 +358,10 @@ const BarChart: React.FC<{
 
     useEffect(() => {
         if (!svgRef.current) return
+        if (data.length === 0) {
+            d3.select(svgRef.current).selectAll('*').remove()
+            return
+        }
 
         const svg = d3.select(svgRef.current)
         svg.selectAll('*').remove()
@@ -535,6 +509,10 @@ const BarChart: React.FC<{
         }
     }, [data, dimensions, horizontal])
 
+    if (data.length === 0) {
+        return <DataUnavailable />
+    }
+
     return (
         <>
             <div ref={containerRef} className="w-full">
@@ -573,6 +551,10 @@ const PieChart: React.FC<{
 
     useEffect(() => {
         if (!svgRef.current) return
+        if (data.length === 0) {
+            d3.select(svgRef.current).selectAll('*').remove()
+            return
+        }
 
         const svg = d3.select(svgRef.current)
         svg.selectAll('*').remove()
@@ -611,6 +593,10 @@ const PieChart: React.FC<{
 
     }, [data, dimensions])
 
+    if (data.length === 0) {
+        return <DataUnavailable />
+    }
+
     return (
         <div ref={containerRef} className="w-full flex justify-center">
             <svg ref={svgRef} width={dimensions.width} height={dimensions.height} />
@@ -648,6 +634,10 @@ const HeatmapChart: React.FC<{
 
     useEffect(() => {
         if (!svgRef.current) return
+        if (data.length === 0) {
+            d3.select(svgRef.current).selectAll('*').remove()
+            return
+        }
 
         const svg = d3.select(svgRef.current)
         svg.selectAll('*').remove()
@@ -735,6 +725,10 @@ const HeatmapChart: React.FC<{
 
     }, [data, dimensions])
 
+    if (data.length === 0) {
+        return <DataUnavailable />
+    }
+
     return (
         <>
             <div ref={containerRef} className="w-full">
@@ -808,13 +802,13 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
     const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'errors' | 'infrastructure'>('overview')
     const [metricData, setMetricData] = useState<MetricData | null>(null)
     const [alerts, setAlerts] = useState<ProjectAlert[]>(propAlerts)
-    const [isConnected, setIsConnected] = useState(false)
     const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-    const eventSourceRef = useRef<EventSource | null>(null)
     const [isLoading, setIsLoading] = useState(true)
+    const [dataError, setDataError] = useState<string | null>(null)
 
     const fetchInitialMetrics = useCallback(async () => {
         setIsLoading(true)
+        setDataError(null)
         try {
             const monitoringUrl = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost:5110'
             const response = await axios.get<{ data: { metrics: any } }>(
@@ -825,6 +819,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
             }
         } catch (error) {
             console.error('Failed to fetch initial metrics:', error)
+            setDataError('Failed to load metrics data')
         } finally {
             setIsLoading(false)
         }
@@ -834,67 +829,22 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
         fetchInitialMetrics()
     }, [fetchInitialMetrics])
 
+    const { metrics, isConnected, lastUpdate: hookLastUpdate, error } = useProjectMetricsUpdates(projectId, timeRange)
+
     useEffect(() => {
-        console.log(process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL)
-        if (eventSourceRef.current) {
-            eventSourceRef.current.close()
+        if (metrics) {
+            setMetricData(metrics)
         }
-
-        const monitoringUrl = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost:5110'
-        const eventSource = new EventSource(`${monitoringUrl}/api/projects/${projectId}/metrics/sse?timeRange=${timeRange}`)
-        eventSourceRef.current = eventSource
-
-        eventSource.onopen = () => {
-            setIsConnected(true)
-            console.log('SSE connected')
+        if (error) {
+            setDataError(error)
         }
+    }, [metrics, error])
 
-        eventSource.addEventListener('connected', (event) => {
-            console.log('SSE connected event:', event)
-            setIsConnected(true)
-        })
-
-        eventSource.addEventListener('metrics', (event) => {
-            try {
-                const data = JSON.parse(event.data)
-                if (data.metrics) {
-                    setMetricData(data.metrics)
-                    if (data.alerts) {
-                        setAlerts(data.alerts.map((a: any) => ({
-                            id: a.id,
-                            type: a.metricType || 'metric',
-                            message: a.message,
-                            severity: a.severity as 'low' | 'medium' | 'high' | 'critical',
-                            timestamp: a.timestamp,
-                            resolved: a.status === 'resolved'
-                        })))
-                    }
-                    setLastUpdate(new Date())
-                }
-            } catch (error) {
-                console.error('Failed to parse metrics:', error)
-            }
-        })
-
-        eventSource.addEventListener('heartbeat', () => {
-            setLastUpdate(new Date())
-        })
-
-        eventSource.addEventListener('error', (event) => {
-            console.error('SSE error:', event)
-            setIsConnected(false)
-        })
-
-        eventSource.onerror = () => {
-            setIsConnected(false)
-            eventSource.close()
+    useEffect(() => {
+        if (hookLastUpdate) {
+            setLastUpdate(hookLastUpdate)
         }
-
-        return () => {
-            eventSource.close()
-            setIsConnected(false)
-        }
-    }, [projectId, timeRange])
+    }, [hookLastUpdate])
 
     const handleResolveAlert = async (alertId: string) => {
         try {
@@ -909,107 +859,79 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
 
     const productionMetrics = metricData?.production
 
-    const generateMockTimeSeries = useCallback((points: number, min: number, max: number) => {
-        const data = []
-        let value = (min + max) / 2
-        const now = Date.now()
-        
-        for (let i = points; i >= 0; i--) {
-            const time = now - i * 60000
-            const change = (Math.random() - 0.5) * 0.15 * value
-            value = Math.max(min, Math.min(max, value + change))
-            data.push({ time, value: Math.round(value * 100) / 100 })
-        }
-        return data
+    // Helper function to format bytes
+    const formatBytes = useCallback((bytes: number): string => {
+        if (bytes === 0) return '0 B'
+        const k = 1024
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+        const i = Math.floor(Math.log(bytes) / Math.log(k))
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
     }, [])
 
-    const requestsData = useMemo(() => {
-        const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateMockTimeSeries(points, 50, 300)
-    }, [timeRange, generateMockTimeSeries])
-
-    const responseTimeData = useMemo(() => {
-        const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateMockTimeSeries(points, 20, 150)
-    }, [timeRange, generateMockTimeSeries])
+    // Time series data from API
+    const timeSeriesData = useMemo(() => {
+        return metricData?.timeSeriesData || []
+    }, [metricData?.timeSeriesData])
 
     const cpuData = useMemo(() => {
-        const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateMockTimeSeries(points, 10, 80)
-    }, [timeRange, generateMockTimeSeries])
+        return timeSeriesData.map(point => ({ time: point.time, value: point.cpuUsage || 0 }))
+    }, [timeSeriesData])
 
     const memoryData = useMemo(() => {
-        const points = timeRange === '1h' ? 60 : timeRange === '6h' ? 72 : timeRange === '24h' ? 144 : timeRange === '7d' ? 168 : 720
-        return generateMockTimeSeries(points, 30, 90)
-    }, [timeRange, generateMockTimeSeries])
+        return timeSeriesData.map(point => ({ time: point.time, value: point.memoryUsage || 0 }))
+    }, [timeSeriesData])
+
+    const requestsData = useMemo(() => {
+        if (metricData?.notAvailable?.includes('requestsData')) {
+            return []
+        }
+        return (metricData?.requestsData || []).map(point => ({ time: point.time, value: point.requestsPerMin || 0 }))
+    }, [metricData?.notAvailable, metricData?.requestsData])
+
+    const responseTimeData = useMemo(() => {
+        if (metricData?.notAvailable?.includes('requestsData')) {
+            return []
+        }
+        return (metricData?.requestsData || []).map(point => ({ time: point.time, value: point.avgLatency || 0 }))
+    }, [metricData?.notAvailable, metricData?.requestsData])
 
     const latencyData = useMemo(() => {
         if (metricData?.notAvailable?.includes('latencyDistribution')) {
-            return [{ bucket: 'Data not available', count: 0 }]
+            return []
         }
-        return [{ bucket: '0-50ms', count: 450 }, { bucket: '50-100ms', count: 320 }, { bucket: '100-200ms', count: 180 }, { bucket: '200-500ms', count: 80 }, { bucket: '500ms-1s', count: 30 }, { bucket: '>1s', count: 15 }]
-    }, [metricData?.notAvailable])
+        return metricData?.latencyDistribution || []
+    }, [metricData?.notAvailable, metricData?.latencyDistribution])
 
     const statusCodesData = useMemo(() => {
         if (metricData?.notAvailable?.includes('statusCodes')) {
-            return [{ code: 'N/A', count: 0, label: 'Data not available' }]
+            return []
         }
-        return [
-            { code: '200', count: 1250, label: 'OK' },
-            { code: '201', count: 320, label: 'Created' },
-            { code: '301', count: 85, label: 'Moved' },
-            { code: '304', count: 180, label: 'Not Modified' },
-            { code: '400', count: 45, label: 'Bad Request' },
-            { code: '401', count: 23, label: 'Unauthorized' },
-            { code: '404', count: 67, label: 'Not Found' },
-            { code: '500', count: 12, label: 'Server Error' }
-        ]
-    }, [metricData?.notAvailable])
+        return metricData?.statusCodes || []
+    }, [metricData?.notAvailable, metricData?.statusCodes])
 
     const endpointsData = useMemo(() => {
         if (metricData?.notAvailable?.includes('endpoints')) {
-            return [{ endpoint: 'No endpoint data available', requests: 0, avgLatency: 0, errorRate: '0' }]
+            return []
         }
-        return [
-            { endpoint: '/api/users', requests: 1250, avgLatency: 45, errorRate: '0.1' },
-            { endpoint: '/api/projects', requests: 890, avgLatency: 67, errorRate: '0.2' },
-            { endpoint: '/api/builds', requests: 650, avgLatency: 123, errorRate: '0.5' },
-            { endpoint: '/api/deployments', requests: 430, avgLatency: 89, errorRate: '0.3' },
-            { endpoint: '/health', requests: 2150, avgLatency: 12, errorRate: '0' },
-            { endpoint: '/api/auth/login', requests: 340, avgLatency: 156, errorRate: '2.1' }
-        ]
-    }, [metricData?.notAvailable])
+        return metricData?.endpoints || []
+    }, [metricData?.notAvailable, metricData?.endpoints])
 
-    const geographicDataMemo = useMemo(() => {
+    const geographicData = useMemo(() => {
         if (metricData?.notAvailable?.includes('geographicData')) {
-            return [{ region: 'No geographic data available', requests: 0, percentage: 0 }]
+            return []
         }
-        return [
-            { region: 'US East', requests: 2340, percentage: 42 },
-            { region: 'Europe', requests: 1680, percentage: 30 },
-            { region: 'Asia Pacific', requests: 890, percentage: 16 },
-            { region: 'US West', requests: 340, percentage: 6 },
-            { region: 'South America', requests: 230, percentage: 4 },
-            { region: 'Other', requests: 120, percentage: 2 }
-        ]
-    }, [metricData?.notAvailable])
+        return metricData?.geographicData || []
+    }, [metricData?.notAvailable, metricData?.geographicData])
 
-    const heatmapDataMemo = useMemo(() => {
+    const heatmapData = useMemo(() => {
         if (metricData?.notAvailable?.includes('heatmapData')) {
             return []
         }
-        const data = []
-        for (let day = 0; day < 7; day++) {
-            for (let hour = 0; hour < 24; hour++) {
-                data.push({
-                    day,
-                    hour,
-                    value: Math.floor(Math.random() * 100) + 20
-                })
-            }
-        }
-        return data
-    }, [metricData?.notAvailable])
+        return metricData?.heatmapData || []
+    }, [metricData?.notAvailable, metricData?.heatmapData])
+
+    const latestCPU = timeSeriesData.length > 0 ? timeSeriesData[timeSeriesData.length - 1].cpuUsage : 0
+    const latestMemory = timeSeriesData.length > 0 ? timeSeriesData[timeSeriesData.length - 1].memoryUsage : 0
 
     const metricCards: MetricCard[] = useMemo(() => [
         { label: 'Requests/min', value: productionMetrics?.requestsPerMin?.toString() || 'N/A', change: 0, icon: TrendingUp, color: 'text-blue-500' },
@@ -1018,40 +940,9 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
         { label: 'Uptime', value: productionMetrics?.uptime || 'N/A', change: 0, icon: Activity, color: 'text-purple-500' }
     ], [productionMetrics])
 
-    const errorTypesData = useMemo(() => [
-        { type: 'Database Timeout', count: 23, severity: 'high' },
-        { type: 'Connection Refused', count: 15, severity: 'medium' },
-        { type: 'Validation Error', count: 45, severity: 'low' },
-        { type: 'Rate Limit', count: 8, severity: 'medium' },
-        { type: 'Memory Limit', count: 3, severity: 'critical' }
-    ], [])
-
-    const geographicData = useMemo(() => {
-        if (geographicDataMemo.length > 0) return geographicDataMemo
-        return [
-            { region: 'US East', requests: 2340, percentage: 42 },
-            { region: 'Europe', requests: 1680, percentage: 30 },
-            { region: 'Asia Pacific', requests: 890, percentage: 16 },
-            { region: 'US West', requests: 340, percentage: 6 },
-            { region: 'South America', requests: 230, percentage: 4 },
-            { region: 'Other', requests: 120, percentage: 2 }
-        ]
-    }, [geographicDataMemo])
-
-    const heatmapData = useMemo(() => {
-        if (heatmapDataMemo.length > 0) return heatmapDataMemo
-        const data = []
-        for (let day = 0; day < 7; day++) {
-            for (let hour = 0; hour < 24; hour++) {
-                data.push({
-                    day,
-                    hour,
-                    value: Math.floor(Math.random() * 100) + 20
-                })
-            }
-        }
-        return data
-    }, [heatmapDataMemo])
+    const errorTypesData = useMemo(() => {
+        return metricData?.errorTypes || []
+    }, [metricData?.errorTypes])
 
     if (isLoading && !metricData) {
         return (
@@ -1095,7 +986,13 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                 <TimeRangeSelector selected={timeRange} onChange={setTimeRange} />
             </div>
 
-            {/* Tab Navigation */}
+            {dataError && (
+                <div className="flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 p-4">
+                    <AlertCircle className="text-red-500" size={20} />
+                    <span className="text-sm text-red-400">{dataError}</span>
+                </div>
+            )}
+
             <div className="border-b border-zinc-800">
                 <div className="flex gap-1">
                     {[
@@ -1273,8 +1170,8 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                 {endpointsData.map((endpoint, idx) => (
                                     <div key={idx} className="flex items-center justify-between rounded-lg bg-zinc-900/50 p-3">
                                         <div>
-                                            <div className="font-mono text-sm text-blue-400">{endpoint.endpoint}</div>
-                                            <div className="text-xs text-zinc-500">{endpoint.requests.toLocaleString()} requests</div>
+                                            <div className="font-mono text-sm text-blue-400">{endpoint.path || endpoint.endpoint || '/'}</div>
+                                            <div className="text-xs text-zinc-500">{(endpoint.requestCount || endpoint.requests || 0).toLocaleString()} requests</div>
                                         </div>
                                         <div className="text-right">
                                             <div className="text-sm font-medium text-zinc-300">{endpoint.avgLatency}ms</div>
@@ -1371,9 +1268,9 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                 {endpointsData.map((endpoint, idx) => (
                                     <tr key={idx} className="hover:bg-zinc-900/50">
                                         <td className="px-5 py-3">
-                                            <span className="font-mono text-sm text-blue-400">{endpoint.endpoint}</span>
+                                            <span className="font-mono text-sm text-blue-400">{endpoint.path || endpoint.endpoint || '/'}</span>
                                         </td>
-                                        <td className="px-5 py-3 text-right text-sm text-zinc-300">{endpoint.requests.toLocaleString()}</td>
+                                        <td className="px-5 py-3 text-right text-sm text-zinc-300">{(endpoint.requestCount || endpoint.requests || 0).toLocaleString()}</td>
                                         <td className="px-5 py-3 text-right text-sm text-zinc-300">{endpoint.avgLatency}ms</td>
                                         <td className="px-5 py-3 text-right text-sm text-zinc-300">{Math.round(endpoint.avgLatency * 2.5)}ms</td>
                                         <td className="px-5 py-3 text-right">
@@ -1399,7 +1296,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                             <span className="text-sm text-zinc-400">{projectData.metrics.errors24h} errors in 24h</span>
                         </div>
                         <LineChart 
-                            data={generateTimeSeriesData(144, 0, 5, 0.2)} 
+                            data={requestsData} 
                             color="#ef4444" 
                             height={250} 
                             showArea 
@@ -1462,7 +1359,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                 <h3 className="font-semibold text-white">CPU Usage</h3>
                                 <div className="flex items-center gap-2">
                                     <Cpu size={16} className="text-blue-500" />
-                                    <span className="text-sm text-zinc-400">45%</span>
+                                    <span className="text-sm text-zinc-400">{latestCPU > 0 ? `${latestCPU.toFixed(1)}%` : 'N/A'}</span>
                                 </div>
                             </div>
                             <LineChart 
@@ -1470,7 +1367,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                 color="#3b82f6" 
                                 height={200} 
                                 showArea 
-                                valueFormatter={(v) => `${Math.round(v)}%`}
+                                valueFormatter={(v) => `${v.toFixed(1)}%`}
                             />
                         </div>
 
@@ -1479,7 +1376,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                 <h3 className="font-semibold text-white">Memory Usage</h3>
                                 <div className="flex items-center gap-2">
                                     <Database size={16} className="text-purple-500" />
-                                    <span className="text-sm text-zinc-400">67%</span>
+                                    <span className="text-sm text-zinc-400">{latestMemory > 0 ? formatBytes(latestMemory) : 'N/A'}</span>
                                 </div>
                             </div>
                             <LineChart 
@@ -1487,7 +1384,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                 color="#a855f7" 
                                 height={200} 
                                 showArea 
-                                valueFormatter={(v) => `${Math.round(v)}%`}
+                                valueFormatter={(v) => formatBytes(v)}
                             />
                         </div>
                     </div>
@@ -1525,7 +1422,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                     <div className="space-y-2">
                                         <div className="flex justify-between text-sm">
                                             <span className="text-zinc-500">CPU</span>
-                                            <span className="text-zinc-300">{container.cpuUsage || 'N/A'}%</span>
+                                            <span className="text-zinc-300">{(container.cpuUsage ?? -1) < 0 ? 'N/A' : container.cpuUsage + '%'}</span>
                                         </div>
                                         <div className="flex justify-between text-sm">
                                             <span className="text-zinc-500">Memory</span>
@@ -1534,11 +1431,12 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                         <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
                                             <div
                                                 className={`h-full ${
-                                                    (container.cpuUsage || 0) > 80 ? 'bg-red-500' :
-                                                    (container.cpuUsage || 0) > 60 ? 'bg-yellow-500' :
+                                                    (container.cpuUsage ?? -1) < 0 ? 'bg-zinc-600' :
+                                                    (container.cpuUsage ?? 0) > 80 ? 'bg-red-500' :
+                                                    (container.cpuUsage ?? 0) > 60 ? 'bg-yellow-500' :
                                                     'bg-green-500'
                                                 }`}
-                                                style={{ width: `${Math.min(container.cpuUsage || 0, 100)}%` }}
+                                                style={{ width: `${Math.min((container.cpuUsage ?? -1) < 0 ? 0 : (container.cpuUsage ?? 0), 100)}%` }}
                                             />
                                         </div>
                                     </div>

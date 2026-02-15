@@ -68,6 +68,11 @@ func main() {
 
 	orchestrator := monitoring.NewOrchestrator(cfg, dbConn, redisClient, minioClient.Client)
 
+	// Start HTTP metrics collection from Traefik
+	if err := orchestrator.RunHTTPMetricsCollection(context.Background()); err != nil {
+		logger.Warn("Failed to start HTTP metrics collection", logger.Err(err))
+	}
+
 	workerPool := worker.NewWorkerPool(cfg, orchestrator)
 	workerPool.Start()
 	defer workerPool.Stop()

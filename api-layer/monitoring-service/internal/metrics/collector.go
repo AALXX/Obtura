@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	"monitoring-service/pkg/db"
 	"monitoring-service/pkg/docker"
 	"monitoring-service/pkg/logger"
+
+	"go.uber.org/zap"
 )
 
 type Collector struct {
@@ -32,7 +35,17 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 		return fmt.Errorf("failed to get active deployments: %w", err)
 	}
 
+	logger.Info("Starting metrics collection", logger.Int("active_deployments", len(deployments)))
+
+	if len(deployments) == 0 {
+		logger.Warn("No active deployments found for metrics collection")
+		return nil
+	}
+
 	for _, deployment := range deployments {
+		logger.Info("Collecting metrics for deployment",
+			logger.String("deployment_id", deployment.ID),
+			logger.String("container_id", deployment.ContainerID))
 		if err := c.collectDeploymentMetrics(ctx, deployment); err != nil {
 			logger.Error("Failed to collect metrics for deployment", logger.String("deployment_id", deployment.ID), logger.Err(err))
 		}
@@ -78,6 +91,11 @@ func (c *Collector) collectDeploymentMetrics(ctx context.Context, deployment *De
 		logger.Error("Failed to cache metric", logger.Err(err))
 	}
 
+	// Update deployment_containers with latest metrics
+	if err := c.updateContainerMetrics(ctx, deployment.ContainerUUID, cpuUsage, memoryUsage); err != nil {
+		logger.Error("Failed to update container metrics", logger.Err(err))
+	}
+
 	return nil
 }
 
@@ -101,7 +119,17 @@ func (c *Collector) storeMetric(ctx context.Context, metric *DeploymentMetric) e
 		metric.Status,
 	)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to insert metric: %w", err)
+	}
+
+	logger.Info("Stored metric",
+		logger.String("deployment_id", metric.DeploymentID),
+		zap.Float64("cpu", metric.CPUUsage),
+		zap.Int64("memory", metric.MemoryUsage),
+		logger.String("status", metric.Status))
+
+	return nil
 }
 
 func (c *Collector) cacheMetric(ctx context.Context, metric *DeploymentMetric) error {
@@ -132,6 +160,7 @@ func (c *Collector) getActiveDeployments(ctx context.Context) ([]*Deployment, er
 	query := `
 		SELECT 
 			d.id, 
+			dc.id as container_uuid,
 			dc.container_id,
 			dc.status
 		FROM deployments d
@@ -148,7 +177,7 @@ func (c *Collector) getActiveDeployments(ctx context.Context) ([]*Deployment, er
 	var deployments []*Deployment
 	for rows.Next() {
 		var d Deployment
-		if err := rows.Scan(&d.ID, &d.ContainerID, &d.Status); err != nil {
+		if err := rows.Scan(&d.ID, &d.ContainerUUID, &d.ContainerID, &d.Status); err != nil {
 			return nil, err
 		}
 		deployments = append(deployments, &d)
@@ -157,10 +186,33 @@ func (c *Collector) getActiveDeployments(ctx context.Context) ([]*Deployment, er
 	return deployments, nil
 }
 
+func (c *Collector) updateContainerMetrics(ctx context.Context, containerUUID string, cpuPercent float64, memoryBytes int64) error {
+	// Convert bytes to MB and round to integer
+	memoryMB := int(float64(memoryBytes) / (1024 * 1024))
+	// Round CPU to 2 decimal places
+	cpuRounded := math.Round(cpuPercent*100) / 100
+
+	query := `
+		UPDATE deployment_containers
+		SET cpu_usage_percent = $2,
+		    memory_usage_mb = $3,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	_, err := c.db.ExecContext(ctx, query, containerUUID, cpuRounded, memoryMB)
+	if err != nil {
+		return fmt.Errorf("failed to update container metrics: %w", err)
+	}
+
+	return nil
+}
+
 type Deployment struct {
-	ID          string
-	ContainerID string
-	Status      string
+	ID            string
+	ContainerID   string // Docker container ID
+	ContainerUUID string // deployment_containers.id (UUID)
+	Status        string
 }
 
 type DeploymentMetric struct {

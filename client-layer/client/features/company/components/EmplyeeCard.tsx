@@ -78,7 +78,8 @@ const EmployeeCard: React.FC<EmployeeCardProps> = ({ name, email, phone, id, rol
                     userId: id
                 }
             })
-            if (response.data.success) {
+            const responseData = response.data as { success?: boolean }
+            if (responseData.success) {
                 showToast('success', `${name} has been removed from the company`)
                 setTimeout(() => window.location.reload(), 1500)
             }

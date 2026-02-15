@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"monitoring-service/internal/metrics"
 	"monitoring-service/internal/monitoring"
 	"monitoring-service/pkg/config"
 	"monitoring-service/pkg/logger"
@@ -908,6 +909,9 @@ func (s *Server) corsMiddleware() gin.HandlerFunc {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Writer.Header().Set("Access-Control-Expose-Headers", "Content-Type")
+		c.Writer.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, proxy-revalidate")
+		c.Writer.Header().Set("Connection", "keep-alive")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusOK)
@@ -937,14 +941,39 @@ func (s *Server) timeoutMiddleware() gin.HandlerFunc {
 
 // Project-level metrics handlers
 
+type TimeSeriesPoint struct {
+	Time        int64   `json:"time"`
+	CPUUsage    float64 `json:"cpuUsage"`
+	MemoryUsage int64   `json:"memoryUsage"`
+}
+
+type StatusCodeStat struct {
+	Code  string `json:"code"`
+	Count int64  `json:"count"`
+	Label string `json:"label"`
+}
+
+type HeatmapPoint struct {
+	Day   int `json:"day"`
+	Hour  int `json:"hour"`
+	Value int `json:"value"`
+}
+
 type ProjectMetricsResponse struct {
-	ProjectID          string             `json:"projectId"`
-	Production         *DeploymentMetrics `json:"production,omitempty"`
-	Staging            *DeploymentMetrics `json:"staging,omitempty"`
-	AvailableDataTypes []string           `json:"availableDataTypes"`
-	NotAvailable       []string           `json:"notAvailable"`
-	TimeRange          string             `json:"timeRange"`
-	Timestamp          time.Time          `json:"timestamp"`
+	ProjectID           string                      `json:"projectId"`
+	Production          *DeploymentMetrics          `json:"production,omitempty"`
+	Staging             *DeploymentMetrics          `json:"staging,omitempty"`
+	AvailableDataTypes  []string                    `json:"availableDataTypes"`
+	NotAvailable        []string                    `json:"notAvailable"`
+	TimeRange           string                      `json:"timeRange"`
+	Timestamp           time.Time                   `json:"timestamp"`
+	TimeSeriesData      []TimeSeriesPoint           `json:"timeSeriesData,omitempty"`
+	LatencyDistribution []metrics.LatencyBucket     `json:"latencyDistribution,omitempty"`
+	StatusCodes         []StatusCodeStat            `json:"statusCodes,omitempty"`
+	Endpoints           []metrics.EndpointStat      `json:"endpoints,omitempty"`
+	GeographicData      []metrics.GeoStat           `json:"geographicData,omitempty"`
+	HeatmapData         []HeatmapPoint              `json:"heatmapData,omitempty"`
+	RequestsData        []metrics.RequestsDataPoint `json:"requestsData,omitempty"`
 }
 
 type DeploymentMetrics struct {
@@ -991,9 +1020,6 @@ func (s *Server) handleGetProjectMetrics(c *gin.Context) {
 		available = append(available, "staging")
 	}
 
-	// HTTP metrics are not available (data-layer exists but not populated)
-	notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData")
-
 	response := ProjectMetricsResponse{
 		ProjectID:          projectID,
 		AvailableDataTypes: available,
@@ -1004,22 +1030,70 @@ func (s *Server) handleGetProjectMetrics(c *gin.Context) {
 
 	if prodDeployment != nil {
 		response.Production = prodMetrics
+		// Fetch historical time series data for production deployment
+		timeSeriesData, err := s.getDeploymentTimeSeriesData(ctx, *prodDeployment, timeRange)
+		if err != nil {
+			logger.Error("Failed to get time series data", zap.String("deployment_id", *prodDeployment), logger.Err(err))
+		} else {
+			response.TimeSeriesData = timeSeriesData
+			if len(timeSeriesData) > 0 {
+				available = append(available, "timeSeriesData")
+			}
+		}
+
+		// Fetch HTTP metrics for production deployment
+		httpMetrics, err := s.getHTTPMetrics(ctx, *prodDeployment, timeRange)
+		if err != nil {
+			logger.Error("Failed to get HTTP metrics", zap.String("deployment_id", *prodDeployment), logger.Err(err))
+			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData", "requestsData")
+		} else {
+			response.LatencyDistribution = httpMetrics.LatencyDistribution
+			response.StatusCodes = httpMetrics.StatusCodes
+			response.Endpoints = httpMetrics.Endpoints
+			response.GeographicData = httpMetrics.GeographicData
+			response.HeatmapData = httpMetrics.HeatmapData
+			response.RequestsData = httpMetrics.RequestsData
+
+			if len(httpMetrics.LatencyDistribution) > 0 {
+				available = append(available, "latencyDistribution")
+			}
+			if len(httpMetrics.StatusCodes) > 0 {
+				available = append(available, "statusCodes")
+			}
+			if len(httpMetrics.Endpoints) > 0 {
+				available = append(available, "endpoints")
+			}
+			if len(httpMetrics.GeographicData) > 0 {
+				available = append(available, "geographicData")
+			}
+			if len(httpMetrics.HeatmapData) > 0 {
+				available = append(available, "heatmapData")
+			}
+			if len(httpMetrics.RequestsData) > 0 {
+				available = append(available, "requestsData")
+			}
+		}
 	}
 	if stagingDeployment != nil {
 		response.Staging = stagingMetrics
 	}
 
+	response.AvailableDataTypes = available
+	response.NotAvailable = notAvailable
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    response,
+		"data": gin.H{
+			"metrics": response,
+		},
 	})
 }
 
 func (s *Server) getProductionDeploymentMetrics(ctx context.Context, projectID string) (*string, *DeploymentMetrics) {
-	// Get production deployment with its container info in one query
+	// Get production deployment with its container info and HTTP metrics
 	query := `
 		SELECT 
-			d.id, d.status, d.current_requests_per_minute, d.avg_response_time_ms,
+			d.id, d.status,
 			dc.container_id, dc.cpu_usage_percent, dc.memory_usage_mb, dc.health_status, dc.status as container_status
 		FROM deployments d
 		LEFT JOIN deployment_containers dc ON dc.deployment_id = d.id AND dc.is_active = true
@@ -1031,22 +1105,40 @@ func (s *Server) getProductionDeploymentMetrics(ctx context.Context, projectID s
 	`
 
 	var deploymentID, status, containerID, containerHealth, containerStatus sql.NullString
-	var requestsPerMin, avgLatencyMs sql.NullInt64
 	var cpuPercent, memMB sql.NullFloat64
 
 	err := s.orchestrator.GetDB().QueryRowContext(ctx, query, projectID).Scan(
-		&deploymentID, &status, &requestsPerMin, &avgLatencyMs,
+		&deploymentID, &status,
 		&containerID, &cpuPercent, &memMB, &containerHealth, &containerStatus,
 	)
 
-	if err == sql.ErrNoRows || deploymentID.String == "" {
-		logger.Warn("No active production deployment found", zap.String("project_id", projectID))
+	if err == sql.ErrNoRows {
+		// This is normal during SSE initialization - no need to warn
 		return nil, nil
 	}
 	if err != nil {
 		logger.Error("Failed to get production deployment metrics", zap.String("project_id", projectID), logger.Err(err))
 		return nil, nil
 	}
+
+	// Check if deployment ID is empty after successful query
+	if !deploymentID.Valid || deploymentID.String == "" {
+		return nil, nil
+	}
+
+	// Get HTTP metrics for this deployment
+	httpQuery := `
+		SELECT 
+			COALESCE(SUM(request_count), 0)::integer as requests_per_minute,
+			COALESCE(AVG(latency_avg), 0)::integer as latency_avg,
+			COALESCE(AVG(error_rate) * 100, 0) as error_rate
+		FROM http_metrics_minute
+		WHERE deployment_id = $1
+		  AND timestamp_minute >= NOW() - INTERVAL '5 minutes'
+	`
+	var requestsPerMin, avgLatencyMs int
+	var errorRate float64
+	s.orchestrator.GetDB().QueryRowContext(ctx, httpQuery, deploymentID.String).Scan(&requestsPerMin, &avgLatencyMs, &errorRate)
 
 	logger.Info("Production deployment metrics query result",
 		zap.String("deployment_id", deploymentID.String),
@@ -1055,12 +1147,14 @@ func (s *Server) getProductionDeploymentMetrics(ctx context.Context, projectID s
 		zap.Float64("cpu", cpuPercent.Float64),
 		zap.Float64("memory", memMB.Float64),
 		zap.String("health", containerHealth.String),
+		zap.Int("requests_per_min", requestsPerMin),
+		zap.Int("latency_avg", avgLatencyMs),
 	)
 
-	// Determine error rate based on container health
-	errorRate := "0.00"
-	if containerHealth.String == "unhealthy" || containerStatus.String == "unhealthy" {
-		errorRate = "100.00"
+	// Use HTTP metrics error rate, or fallback to container health
+	errRate := fmt.Sprintf("%.2f", errorRate)
+	if errorRate == 0 && (containerHealth.String == "unhealthy" || containerStatus.String == "unhealthy") {
+		errRate = "100.00"
 	}
 
 	// Calculate uptime
@@ -1074,10 +1168,10 @@ func (s *Server) getProductionDeploymentMetrics(ctx context.Context, projectID s
 	// If no CPU/memory from container, show as N/A
 	cpuUsage := cpuPercent.Float64
 	memUsage := int64(memMB.Float64)
-	if !cpuPercent.Valid || cpuPercent.Float64 == 0 {
-		cpuUsage = 0 // Will show as 0 in UI
+	if !cpuPercent.Valid {
+		cpuUsage = -1 // Will show as N/A in UI
 	}
-	if !memMB.Valid || memMB.Float64 == 0 {
+	if !memMB.Valid {
 		memUsage = 0
 	}
 
@@ -1087,9 +1181,9 @@ func (s *Server) getProductionDeploymentMetrics(ctx context.Context, projectID s
 		MemoryUsage:    memUsage,
 		NetworkRx:      0,
 		NetworkTx:      0,
-		RequestsPerMin: int(requestsPerMin.Int64),
-		AvgLatency:     fmt.Sprintf("%dms", avgLatencyMs.Int64),
-		ErrorRate:      errorRate + "%",
+		RequestsPerMin: requestsPerMin,
+		AvgLatency:     fmt.Sprintf("%dms", avgLatencyMs),
+		ErrorRate:      errRate + "%",
 		Uptime:         uptime + "%",
 		Status:         status.String,
 	}
@@ -1144,29 +1238,362 @@ func (s *Server) getStagingDeploymentMetrics(ctx context.Context, projectID stri
 	}
 }
 
+func (s *Server) getDeploymentTimeSeriesData(ctx context.Context, deploymentID string, timeRange string) ([]TimeSeriesPoint, error) {
+	// Parse timeRange into hours for debugging
+	timeRangeSQL := ""
+	switch timeRange {
+	case "1h":
+		timeRangeSQL = "1 hour"
+	case "6h":
+		timeRangeSQL = "6 hours"
+	case "24h":
+		timeRangeSQL = "24 hours"
+	case "7d":
+		timeRangeSQL = "7 days"
+	case "30d":
+		timeRangeSQL = "30 days"
+	default:
+		timeRangeSQL = "24 hours"
+	}
+
+	query := `
+		SELECT 
+			EXTRACT(EPOCH FROM timestamp) * 1000 as time_ms,
+			COALESCE(cpu_usage, 0) as cpu_usage,
+			COALESCE(memory_usage, 0) as memory_usage,
+			COALESCE(network_rx, 0) as network_rx,
+			COALESCE(network_tx, 0) as network_tx
+		FROM deployments_metrics
+		WHERE deployment_id = $1 
+		  AND timestamp >= NOW() - $2::interval
+		ORDER BY timestamp ASC
+	`
+
+	logger.Info("Querying time series data",
+		zap.String("deployment_id", deploymentID),
+		zap.String("time_range", timeRange),
+		zap.String("interval", timeRangeSQL))
+
+	rows, err := s.orchestrator.GetDB().QueryContext(ctx, query, deploymentID, timeRangeSQL)
+	if err != nil {
+		logger.Error("Failed to query time series", zap.String("deployment_id", deploymentID), logger.Err(err))
+		return nil, fmt.Errorf("failed to query time series data: %w", err)
+	}
+	defer rows.Close()
+
+	var data []TimeSeriesPoint
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+		var point TimeSeriesPoint
+		var netRx, netTx int64
+		var timeFloat float64
+		err := rows.Scan(
+			&timeFloat,
+			&point.CPUUsage,
+			&point.MemoryUsage,
+			&netRx,
+			&netTx,
+		)
+		if err != nil {
+			logger.Error("Failed to scan time series row", zap.Int("row", rowCount), logger.Err(err))
+			continue
+		}
+		point.Time = int64(timeFloat)
+		data = append(data, point)
+	}
+
+	if err = rows.Err(); err != nil {
+		logger.Error("Error iterating rows", logger.Err(err))
+		return nil, fmt.Errorf("error iterating time series rows: %w", err)
+	}
+
+	logger.Info("Retrieved time series data",
+		zap.String("deployment_id", deploymentID),
+		zap.Int("total_rows", rowCount),
+		zap.Int("valid_points", len(data)),
+		zap.String("time_range", timeRange))
+
+	return data, nil
+}
+
+type HTTPMetricsData struct {
+	LatencyDistribution []metrics.LatencyBucket
+	StatusCodes         []StatusCodeStat
+	Endpoints           []metrics.EndpointStat
+	GeographicData      []metrics.GeoStat
+	HeatmapData         []HeatmapPoint
+	RequestsData        []metrics.RequestsDataPoint
+}
+
+func (s *Server) getHTTPMetrics(ctx context.Context, deploymentID string, timeRange string) (*HTTPMetricsData, error) {
+	interval := getTimeRangeInterval(timeRange)
+
+	data := &HTTPMetricsData{}
+
+	// Get latency distribution
+	latencyQuery := `
+		SELECT 
+			CASE 
+				WHEN latency_avg < 50 THEN '0-50ms'
+				WHEN latency_avg < 100 THEN '50-100ms'
+				WHEN latency_avg < 200 THEN '100-200ms'
+				WHEN latency_avg < 500 THEN '200-500ms'
+				WHEN latency_avg < 1000 THEN '500ms-1s'
+				ELSE '>1s'
+			END as bucket,
+			SUM(request_count) as count
+		FROM http_metrics_minute
+		WHERE deployment_id = $1 
+		  AND timestamp_minute >= NOW() - $2::interval
+		GROUP BY 1
+		ORDER BY MIN(latency_avg)
+	`
+	latencyRows, err := s.orchestrator.GetDB().QueryContext(ctx, latencyQuery, deploymentID, interval)
+	if err == nil {
+		defer latencyRows.Close()
+		for latencyRows.Next() {
+			var b metrics.LatencyBucket
+			var count int64
+			if err := latencyRows.Scan(&b.Bucket, &count); err == nil {
+				b.Count = count
+				data.LatencyDistribution = append(data.LatencyDistribution, b)
+			}
+		}
+	}
+
+	// Get status codes
+	statusQuery := `
+		SELECT 
+			status_code::text as code,
+			SUM(request_count) as count
+		FROM http_metrics_minute
+		WHERE deployment_id = $1 
+		  AND timestamp_minute >= NOW() - $2::interval
+		GROUP BY status_code
+		ORDER BY count DESC
+	`
+	statusRows, err := s.orchestrator.GetDB().QueryContext(ctx, statusQuery, deploymentID, interval)
+	if err == nil {
+		defer statusRows.Close()
+		for statusRows.Next() {
+			var stat StatusCodeStat
+			if err := statusRows.Scan(&stat.Code, &stat.Count); err == nil {
+				stat.Label = getStatusCodeLabel(stat.Code)
+				data.StatusCodes = append(data.StatusCodes, stat)
+			}
+		}
+	}
+
+	// Get top endpoints - aggregate from http_metrics_minute
+	endpointsQuery := `
+		SELECT 
+			'/' || SUBSTRING(deployment_id::text, 1, 8) as path_normalized,
+			'GET' as method,
+			SUM(request_count) as request_count,
+			AVG(latency_avg)::integer as latency_avg,
+			AVG(error_rate) * 100 as error_rate
+		FROM http_metrics_minute
+		WHERE deployment_id = $1 
+		  AND timestamp_minute >= NOW() - $2::interval
+		GROUP BY deployment_id
+		ORDER BY request_count DESC
+		LIMIT 10
+	`
+	endpointsRows, err := s.orchestrator.GetDB().QueryContext(ctx, endpointsQuery, deploymentID, interval)
+	if err == nil {
+		defer endpointsRows.Close()
+		for endpointsRows.Next() {
+			var e metrics.EndpointStat
+			var errorRate float64
+			if err := endpointsRows.Scan(&e.Path, &e.Method, &e.RequestCount, &e.AvgLatency, &errorRate); err == nil {
+				e.ErrorRate = fmt.Sprintf("%.2f", errorRate)
+				data.Endpoints = append(data.Endpoints, e)
+			}
+		}
+	}
+
+	// Get geographic distribution - use container region as placeholder
+	geoQuery := `
+		SELECT 
+			'US' as country_code,
+			'Unknown' as region,
+			SUM(request_count) as request_count
+		FROM http_metrics_minute
+		WHERE deployment_id = $1 
+		  AND timestamp_minute >= NOW() - $2::interval
+		GROUP BY deployment_id
+		ORDER BY request_count DESC
+		LIMIT 10
+	`
+	geoRows, err := s.orchestrator.GetDB().QueryContext(ctx, geoQuery, deploymentID, interval)
+	if err == nil {
+		defer geoRows.Close()
+		totalRequests := 0
+		for geoRows.Next() {
+			var g metrics.GeoStat
+			if err := geoRows.Scan(&g.CountryCode, &g.Region, &g.Requests); err == nil {
+				totalRequests += g.Requests
+				data.GeographicData = append(data.GeographicData, g)
+			}
+		}
+		for i := range data.GeographicData {
+			if totalRequests > 0 {
+				data.GeographicData[i].Percentage = (data.GeographicData[i].Requests * 100) / totalRequests
+			}
+		}
+	}
+
+	// Get heatmap data (requests by hour and day)
+	heatmapQuery := `
+		SELECT 
+			EXTRACT(DOW FROM timestamp_minute)::int as day,
+			EXTRACT(HOUR FROM timestamp_minute)::int as hour,
+			SUM(request_count) as value
+		FROM http_metrics_minute
+		WHERE deployment_id = $1 
+		  AND timestamp_minute >= NOW() - $2::interval
+		GROUP BY 1, 2
+		ORDER BY 1, 2
+	`
+	heatmapRows, err := s.orchestrator.GetDB().QueryContext(ctx, heatmapQuery, deploymentID, interval)
+	if err == nil {
+		defer heatmapRows.Close()
+		for heatmapRows.Next() {
+			var h HeatmapPoint
+			if err := heatmapRows.Scan(&h.Day, &h.Hour, &h.Value); err == nil {
+				data.HeatmapData = append(data.HeatmapData, h)
+			}
+		}
+	}
+
+	// Get requests time series
+	requestsQuery := `
+		SELECT 
+			EXTRACT(EPOCH FROM timestamp_minute) * 1000 as time_ms,
+			COALESCE(requests_per_minute, 0) as rpm,
+			COALESCE(latency_avg, 0) as latency,
+			COALESCE(error_rate, 0) as error_rate
+		FROM http_metrics_minute
+		WHERE deployment_id = $1 
+		  AND timestamp_minute >= NOW() - $2::interval
+		ORDER BY timestamp_minute ASC
+	`
+	requestsRows, err := s.orchestrator.GetDB().QueryContext(ctx, requestsQuery, deploymentID, interval)
+	if err == nil {
+		defer requestsRows.Close()
+		for requestsRows.Next() {
+			var d metrics.RequestsDataPoint
+			var timeMs float64
+			var errorRate float64
+			if err := requestsRows.Scan(&timeMs, &d.RequestsPerMin, &d.AvgLatency, &errorRate); err == nil {
+				d.Time = int64(timeMs)
+				d.ErrorRate = errorRate * 100
+				data.RequestsData = append(data.RequestsData, d)
+			}
+		}
+	}
+
+	return data, nil
+}
+
+func getStatusCodeLabel(code string) string {
+	labels := map[string]string{
+		"200": "OK",
+		"201": "Created",
+		"204": "No Content",
+		"301": "Moved Permanently",
+		"302": "Found",
+		"304": "Not Modified",
+		"400": "Bad Request",
+		"401": "Unauthorized",
+		"403": "Forbidden",
+		"404": "Not Found",
+		"405": "Method Not Allowed",
+		"429": "Too Many Requests",
+		"500": "Internal Server Error",
+		"502": "Bad Gateway",
+		"503": "Service Unavailable",
+	}
+	if label, ok := labels[code]; ok {
+		return label
+	}
+	return code
+}
+
+func getTimeRangeInterval(timeRange string) string {
+	switch timeRange {
+	case "1h":
+		return "1 hour"
+	case "6h":
+		return "6 hours"
+	case "24h":
+		return "24 hours"
+	case "7d":
+		return "7 days"
+	case "30d":
+		return "30 days"
+	default:
+		return "24 hours"
+	}
+}
+
 func (s *Server) handleProjectMetricsSSE(c *gin.Context) {
 	projectID := c.Param("projectId")
 	timeRange := c.DefaultQuery("timeRange", "24h")
 
-	// Set SSE headers
+	proto := c.Request.Proto
+	if strings.Contains(c.Request.Header.Get("Alt-Used"), ":443") ||
+		strings.Contains(proto, "HTTP/3") {
+		c.Header("Alt-Svc", "clear")
+	}
+
+	// Set SSE headers - critical for HTTP/2/HTTP/3 compatibility
 	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate, proxy-revalidate")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	c.Header("Access-Control-Expose-Headers", "Content-Type")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+	c.Header("Content-Encoding", "identity")
+	c.Header("Transfer-Encoding", "identity")
+
+	// Get the flusher interface for proper streaming
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Streaming not supported"})
+		return
+	}
+
+	// Write status and headers immediately
+	c.Status(http.StatusOK)
+	flusher.Flush()
 
 	logger.Info("SSE connection opened for project", zap.String("project_id", projectID))
 
 	// Create a channel to signal client disconnect
 	clientGone := c.Request.Context().Done()
 
-	// Send initial data
-	s.sendProjectMetricsEvent(c, projectID, timeRange)
+	// Send an initial comment to establish connection first
+	fmt.Fprintf(c.Writer, ":ok\n\n")
+	flusher.Flush()
 
-	// Send heartbeat every 30 seconds
-	heartbeat := time.NewTicker(30 * time.Second)
-	metricsTicker := time.NewTicker(10 * time.Second)
+	// Then send initial data
+	s.sendProjectMetricsEvent(c, flusher, projectID, timeRange)
+
+	// Send heartbeat every 5 seconds (shorter for HTTP/3 compatibility)
+	heartbeat := time.NewTicker(5 * time.Second)
+	metricsTicker := time.NewTicker(5 * time.Second)
 	defer heartbeat.Stop()
 	defer metricsTicker.Stop()
+
+	// Send an initial comment to establish connection
+	fmt.Fprintf(c.Writer, ":ok\n\n")
+	flusher.Flush()
 
 	for {
 		select {
@@ -1174,15 +1601,15 @@ func (s *Server) handleProjectMetricsSSE(c *gin.Context) {
 			logger.Info("SSE client disconnected", zap.String("project_id", projectID))
 			return
 		case <-heartbeat.C:
-			c.SSEvent("heartbeat", gin.H{"timestamp": time.Now().Unix()})
-			c.Writer.Flush()
+			fmt.Fprintf(c.Writer, "event: heartbeat\ndata: %s\n\n", mustMarshal(gin.H{"timestamp": time.Now().Unix()}))
+			flusher.Flush()
 		case <-metricsTicker.C:
-			s.sendProjectMetricsEvent(c, projectID, timeRange)
+			s.sendProjectMetricsEvent(c, flusher, projectID, timeRange)
 		}
 	}
 }
 
-func (s *Server) sendProjectMetricsEvent(c *gin.Context, projectID, timeRange string) {
+func (s *Server) sendProjectMetricsEvent(c *gin.Context, flusher http.Flusher, projectID, timeRange string) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
@@ -1190,7 +1617,7 @@ func (s *Server) sendProjectMetricsEvent(c *gin.Context, projectID, timeRange st
 	stagingID, stagingMetrics := s.getStagingDeploymentMetrics(ctx, projectID)
 
 	available := []string{}
-	notAvailable := []string{"latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData"}
+	notAvailable := []string{}
 
 	if prodID != nil {
 		available = append(available, "production")
@@ -1209,17 +1636,64 @@ func (s *Server) sendProjectMetricsEvent(c *gin.Context, projectID, timeRange st
 
 	if prodID != nil {
 		response.Production = prodMetrics
+		// Fetch time series data for SSE updates too
+		timeSeriesData, err := s.getDeploymentTimeSeriesData(ctx, *prodID, timeRange)
+		if err != nil {
+			logger.Error("Failed to get SSE time series data", zap.String("deployment_id", *prodID), logger.Err(err))
+		} else {
+			response.TimeSeriesData = timeSeriesData
+			if len(timeSeriesData) > 0 {
+				available = append(available, "timeSeriesData")
+			}
+		}
+
+		// Fetch HTTP metrics for production deployment
+		httpMetrics, err := s.getHTTPMetrics(ctx, *prodID, timeRange)
+		if err != nil {
+			logger.Error("Failed to get SSE HTTP metrics", zap.String("deployment_id", *prodID), logger.Err(err))
+			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData", "requestsData")
+		} else {
+			response.LatencyDistribution = httpMetrics.LatencyDistribution
+			response.StatusCodes = httpMetrics.StatusCodes
+			response.Endpoints = httpMetrics.Endpoints
+			response.GeographicData = httpMetrics.GeographicData
+			response.HeatmapData = httpMetrics.HeatmapData
+			response.RequestsData = httpMetrics.RequestsData
+
+			if len(httpMetrics.LatencyDistribution) > 0 {
+				available = append(available, "latencyDistribution")
+			}
+			if len(httpMetrics.StatusCodes) > 0 {
+				available = append(available, "statusCodes")
+			}
+			if len(httpMetrics.Endpoints) > 0 {
+				available = append(available, "endpoints")
+			}
+			if len(httpMetrics.GeographicData) > 0 {
+				available = append(available, "geographicData")
+			}
+			if len(httpMetrics.HeatmapData) > 0 {
+				available = append(available, "heatmapData")
+			}
+			if len(httpMetrics.RequestsData) > 0 {
+				available = append(available, "requestsData")
+			}
+		}
 	}
 	if stagingID != nil {
 		response.Staging = stagingMetrics
 	}
 
-	c.SSEvent("metrics", gin.H{
+	response.AvailableDataTypes = available
+	response.NotAvailable = notAvailable
+
+	metricsData := gin.H{
 		"metrics":   response,
 		"alerts":    []ProjectAlert{},
 		"timestamp": time.Now().Format(time.RFC3339),
-	})
-	c.Writer.Flush()
+	}
+	fmt.Fprintf(c.Writer, "event: metrics\ndata: %s\n\n", mustMarshal(metricsData))
+	flusher.Flush()
 }
 
 func (s *Server) handleGetProjectAlerts(c *gin.Context) {
