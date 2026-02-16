@@ -73,12 +73,11 @@ services:
       - NEXT_PUBLIC_PAYMENT_SERVICE_URL=https://${DOMAIN}/payment-service
       - NEXT_PUBLIC_MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
       - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
-    secrets:
-      - google_client_id
-      - google_client_secret
-      - auth_secret
-      - change_gmail_secret
-      - team_invitation_secret
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - CHANGE_GMAIL_SECRET=${CHANGE_GMAIL_SECRET}
+      - TEAM_INVITATION_SECRET=${TEAM_INVITATION_SECRET}
     depends_on:
       - traefik
       - core-api
@@ -114,35 +113,33 @@ services:
       - POSTGRESQL_HOST=postgres
       - POSTGRESQL_PORT=5432
       - POSTGRESQL_DATABASE=obtura_db
-      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - POSTGRESQL_USER=${POSTGRES_USER}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD}
+      - ENV_ENCRYPTION_KEY=${ENV_ENCRYPTION_KEY}
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_PROTOCOL=amqp
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_VHOST=/
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
       - RABBITMQ_HEARTBEAT=60
       - RABBITMQ_PREFETCH=10
       - FRONTEND_URL=https://${DOMAIN}
       - MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
       - DEPLOY_SERVICE_URL=https://${DOMAIN}/deploy-service
-    secrets:
-      - postgres_password
-      - postgres_user
-      - env_encryption_key
-      - rabbitmq_user
-      - rabbitmq_password
-      - google_client_id
-      - google_client_secret
-      - auth_secret
-      - change_gmail_secret
-      - team_invitation_secret
-      - email_username
-      - email_password
-      - github_app_id
-      - github_app_client_id
-      - github_app_client_secret
-      - github_app_webhook_secret
-      - github_private_key
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - CHANGE_GMAIL_SECRET=${CHANGE_GMAIL_SECRET}
+      - TEAM_INVITATION_SECRET=${TEAM_INVITATION_SECRET}
+      - EMAIL_USERNAME=${EMAIL_USERNAME}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_APP_CLIENT_ID=${GITHUB_APP_CLIENT_ID}
+      - GITHUB_APP_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}
+      - GITHUB_APP_WEBHOOK_SECRET=${GITHUB_APP_WEBHOOK_SECRET}
+      - GITHUB_APP_PRIVATE_KEY_PATH=${GITHUB_APP_PRIVATE_KEY_PATH}
     depends_on:
       postgres:
         condition: service_healthy
@@ -183,20 +180,18 @@ services:
       - POSTGRESQL_HOST=postgres
       - POSTGRESQL_PORT=5432
       - POSTGRESQL_DATABASE=obtura_db
-      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - POSTGRESQL_USER=${POSTGRES_USER}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD}
+      - ENV_ENCRYPTION_KEY=${ENV_ENCRYPTION_KEY}
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_PROTOCOL=amqp
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
       - RABBITMQ_VHOST=/
       - FRONTEND_URL=https://${DOMAIN}
-    secrets:
-      - postgres_password
-      - postgres_user
-      - env_encryption_key
-      - rabbitmq_user
-      - rabbitmq_password
-      - stripe_secret_key
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -234,23 +229,21 @@ services:
       - POSTGRESQL_HOST=postgres
       - POSTGRESQL_PORT=5432
       - POSTGRESQL_DATABASE=obtura_db
-      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - POSTGRESQL_USER=${POSTGRES_USER}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD}
+      - ENV_ENCRYPTION_KEY=${ENV_ENCRYPTION_KEY}
       - REDIS_URL=redis://redis:6379
       - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - MINIO_USE_SSL=false
       - DOCKER_HOST=tcp://docker:2376
       - DOCKER_TLS_VERIFY=1
       - DOCKER_CERT_PATH=/certs/client/client
       - MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
-    secrets:
-      - postgres_password
-      - postgres_user
-      - env_encryption_key
-      - rabbitmq_url
-      - registry_username
-      - registry_password
-      - minio_access_key
-      - minio_secret_key
+      - REGISTRY_USERNAME=${REGISTRY_USERNAME}
+      - REGISTRY_PASSWORD=${REGISTRY_PASSWORD}
+      - RABBITMQ_URL=${RABBITMQ_URL}
     volumes:
       - build-tmp:/app/tmp
       - docker-certs:/certs/client:ro
@@ -295,23 +288,21 @@ services:
       - POSTGRESQL_HOST=postgres
       - POSTGRESQL_PORT=5432
       - POSTGRESQL_DATABASE=obtura_db
-      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - POSTGRESQL_USER=${POSTGRES_USER}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD}
+      - ENV_ENCRYPTION_KEY=${ENV_ENCRYPTION_KEY}
       - REDIS_URL=redis://redis:6379
       - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - MINIO_USE_SSL=false
       - DOCKER_HOST=tcp://docker:2376
       - DOCKER_TLS_VERIFY=1
       - DOCKER_CERT_PATH=/certs/client/client
       - MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
-    secrets:
-      - postgres_password
-      - postgres_user
-      - env_encryption_key
-      - rabbitmq_url
-      - registry_username
-      - registry_password
-      - minio_access_key
-      - minio_secret_key
+      - REGISTRY_USERNAME=${REGISTRY_USERNAME}
+      - REGISTRY_PASSWORD=${REGISTRY_PASSWORD}
+      - RABBITMQ_URL=${RABBITMQ_URL}
     volumes:
       - deploy-tmp:/app/tmp
       - docker-certs:/certs/client:ro
@@ -352,20 +343,18 @@ services:
       - POSTGRESQL_HOST=postgres
       - POSTGRESQL_PORT=5432
       - POSTGRESQL_DATABASE=obtura_db
-      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - POSTGRESQL_USER=${POSTGRES_USER}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD}
+      - ENV_ENCRYPTION_KEY=${ENV_ENCRYPTION_KEY}
       - REDIS_URL=redis://redis:6379
       - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - MINIO_USE_SSL=false
       - DOCKER_HOST=tcp://docker:2376
       - DOCKER_TLS_VERIFY=1
       - DOCKER_CERT_PATH=/certs/client/client
-    secrets:
-      - postgres_password
-      - postgres_user
-      - env_encryption_key
-      - rabbitmq_url
-      - minio_access_key
-      - minio_secret_key
+      - RABBITMQ_URL=${RABBITMQ_URL}
     volumes:
       - docker-certs:/certs/client:ro
       - traefik-logs:/var/log/traefik:ro
@@ -393,20 +382,17 @@ services:
     image: postgres:17-alpine
     container_name: obtura-postgres
     environment:
-      - POSTGRES_USER_FILE=/run/secrets/postgres_user
-      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=obtura_db
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
-    secrets:
-      - postgres_user
-      - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - postgres_backups:/backups
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/postgres_user) -d obtura_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d obtura_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -453,12 +439,9 @@ services:
     image: rabbitmq:4-alpine
     container_name: obtura-rabbitmq
     environment:
-      - RABBITMQ_DEFAULT_USER_FILE=/run/secrets/rabbitmq_user
-      - RABBITMQ_DEFAULT_PASS_FILE=/run/secrets/rabbitmq_password
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
       - RABBITMQ_DEFAULT_VHOST=/
-    secrets:
-      - rabbitmq_user
-      - rabbitmq_password
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -480,11 +463,8 @@ services:
     image: minio/minio:latest
     container_name: obtura-minio
     environment:
-      - MINIO_ROOT_USER_FILE=/run/secrets/minio_access_key
-      - MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio_secret_key
-    secrets:
-      - minio_access_key
-      - minio_secret_key
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -558,54 +538,4 @@ volumes:
   deploy-tmp:
     driver: local
 
-secrets:
-  postgres_user:
-    external: true
-  postgres_password:
-    external: true
-  env_encryption_key:
-    external: true
-  rabbitmq_user:
-    external: true
-  rabbitmq_password:
-    external: true
-  rabbitmq_url:
-    external: true
-  google_client_id:
-    external: true
-  google_client_secret:
-    external: true
-  auth_secret:
-    external: true
-  change_gmail_secret:
-    external: true
-  team_invitation_secret:
-    external: true
-  email_username:
-    external: true
-  email_password:
-    external: true
-  github_app_id:
-    external: true
-  github_app_client_id:
-    external: true
-  github_app_client_secret:
-    external: true
-  github_app_webhook_secret:
-    external: true
-  github_private_key:
-    external: true
-  stripe_secret_key:
-    external: true
-  stripe_publishable_key:
-    external: true
-  registry_username:
-    external: true
-  registry_password:
-    external: true
-  minio_access_key:
-    external: true
-  minio_secret_key:
-    external: true
-  traefik_dashboard_auth:
-    external: true
+

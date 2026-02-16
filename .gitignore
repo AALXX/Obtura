@@ -21,4 +21,10 @@ docker-compose.dev.yml
 /api-layer/deploy-service/tmp/
 /api-layer/monitoring-service/tmp/
 
-/Docs
+/Docs   
+
+Jenkinsfile
+
+secrets.txt
+
+Jenkinsfile
