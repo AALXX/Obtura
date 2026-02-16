@@ -1,227 +1,294 @@
 pipeline {
-    agent any
+    agent {
+        label 'docker-prod'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        ansiColor('xterm')
+    }
 
     environment {
-        COMPOSE_FILE = "docker-compose.test.yml"
-
-        GOOGLE_CLIENT_ID       = credentials('google-client-id')
-        GOOGLE_CLIENT_SECRET   = credentials('google-client-secret')
-        EMAIL_USERNAME         = credentials('email-username')
-        EMAIL_PASS             = credentials('email-password')
-        POSTGRESQL_PASSWORD    = credentials('postgres-password')
-        AUTH_SECRET            = credentials('auth-secret')
-        CHANGE_GMAIL_SECRET    = credentials('change-gmail-secret')
-        TEAM_INVITATION_SECRET = credentials('team-invitation-secret')
-        ENV_ENCRYPTION_KEY     = credentials('env-encryption-key')
-
-        RABBITMQ_USER          = credentials('rabbitmq-user')
-        RABBITMQ_PASSWORD      = credentials('rabbitmq-password')
-
-        MINIO_ROOT_USER        = credentials('minio-root-user')
-        MINIO_ROOT_PASSWORD    = credentials('minio-root-pass')
-
-        REGISTRY_USERNAME      = credentials('registry-username')
-        REGISTRY_PASSWORD      = credentials('registry-password')
+        COMPOSE_FILE = 'docker-compose.prod.yml'
+        REGISTRY_URL = credentials('registry-url')
+        VERSION = "${env.BUILD_NUMBER}"
+        DEPLOY_TIMEOUT = '300'
     }
 
     stages {
-
-        stage('Checkout') {
+        stage('Initialize') {
             steps {
-                checkout scm
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                    
+                    env.GIT_BRANCH_NAME = env.BRANCH_NAME ?: sh(
+                        script: 'git rev-parse --abbrev-ref HEAD',
+                        returnStdout: true
+                    ).trim()
+                    
+                    echo "Building branch: ${env.GIT_BRANCH_NAME}"
+                    echo "Commit: ${env.GIT_COMMIT_SHORT}"
+                    
+                    if (env.GIT_BRANCH_NAME != 'main' && env.GIT_BRANCH_NAME != 'master') {
+                        error('Deployment only allowed from main/master branch')
+                    }
+                }
             }
         }
 
-        stage('Generate docker-compose.test.yml') {
+        stage('Security Scan') {
+            parallel {
+                stage('Secret Detection') {
+                    steps {
+                        sh '''
+                            if command -v trufflehog &> /dev/null; then
+                                trufflehog filesystem . --json || true
+                            else
+                                echo "TruffleHog not installed, skipping secret scan"
+                            fi
+                        '''
+                    }
+                }
+                stage('Dependency Check') {
+                    steps {
+                        sh '''
+                            echo "Checking for dependency vulnerabilities..."
+                            # Add npm audit, snyk, or trivy scans here
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Build & Push Images') {
+            parallel {
+                stage('Frontend') {
+                    steps {
+                        script {
+                            def image = docker.build(
+                                "${REGISTRY_URL}/obtura-frontend:${VERSION}",
+                                "-f client-layer/client/Dockerfile.prod client-layer/client"
+                            )
+                            docker.withRegistry("https://${REGISTRY_URL}", 'registry-credentials') {
+                                image.push()
+                                image.push('latest')
+                            }
+                        }
+                    }
+                }
+                stage('Core API') {
+                    steps {
+                        script {
+                            def image = docker.build(
+                                "${REGISTRY_URL}/obtura-core-api:${VERSION}",
+                                "-f api-layer/core-api/Dockerfile.prod api-layer/core-api"
+                            )
+                            docker.withRegistry("https://${REGISTRY_URL}", 'registry-credentials') {
+                                image.push()
+                                image.push('latest')
+                            }
+                        }
+                    }
+                }
+                stage('Payment Service') {
+                    steps {
+                        script {
+                            def image = docker.build(
+                                "${REGISTRY_URL}/obtura-payment-service:${VERSION}",
+                                "-f api-layer/payment-service/Dockerfile.prod api-layer/payment-service"
+                            )
+                            docker.withRegistry("https://${REGISTRY_URL}", 'registry-credentials') {
+                                image.push()
+                                image.push('latest')
+                            }
+                        }
+                    }
+                }
+                stage('Build Service') {
+                    steps {
+                        script {
+                            def image = docker.build(
+                                "${REGISTRY_URL}/obtura-build-service:${VERSION}",
+                                "-f api-layer/build-service/Dockerfile.prod api-layer/build-service"
+                            )
+                            docker.withRegistry("https://${REGISTRY_URL}", 'registry-credentials') {
+                                image.push()
+                                image.push('latest')
+                            }
+                        }
+                    }
+                }
+                stage('Deploy Service') {
+                    steps {
+                        script {
+                            def image = docker.build(
+                                "${REGISTRY_URL}/obtura-deploy-service:${VERSION}",
+                                "-f api-layer/deploy-service/Dockerfile.prod api-layer/deploy-service"
+                            )
+                            docker.withRegistry("https://${REGISTRY_URL}", 'registry-credentials') {
+                                image.push()
+                                image.push('latest')
+                            }
+                        }
+                    }
+                }
+                stage('Monitoring Service') {
+                    steps {
+                        script {
+                            def image = docker.build(
+                                "${REGISTRY_URL}/obtura-monitoring-service:${VERSION}",
+                                "-f api-layer/monitoring-service/Dockerfile.prod api-layer/monitoring-service"
+                            )
+                            docker.withRegistry("https://${REGISTRY_URL}", 'registry-credentials') {
+                                image.push()
+                                image.push('latest')
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Create Secrets') {
             steps {
                 sh '''
-cat > docker-compose.test.yml <<'EOF'
-networks:
-  obtura_dev:
-    driver: bridge
-
-services:
-  traefik:
-    image: traefik:v3
-    container_name: obtura-traefik
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entryPoints.web.address=:80
-      - --api.insecure=true
-      - --log.level=INFO
-    ports:
-      - "80:80"
-      - "18080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-    networks:
-      - obtura_dev
-
-  frontend:
-    build:
-      context: ./client-layer/client
-      dockerfile: Dockerfile.dev
-    container_name: obtura-frontend
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.frontend.rule=PathPrefix(`/`) && Host(`localhost`)
-      - traefik.http.routers.frontend.entrypoints=web
-      - traefik.http.routers.frontend.priority=10
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./client-layer/client:/app
-      - /app/node_modules
-    environment:
-      NODE_ENV: development
-      BACKEND_URL: http://traefik/backend
-      NEXT_PUBLIC_BACKEND_URL: http://localhost/backend
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      NEXTAUTH_URL: http://localhost
-      AUTH_SECRET: ${AUTH_SECRET}
-      CHANGE_GMAIL_SECRET: ${CHANGE_GMAIL_SECRET}
-      TEAM_INVITATION_SECRET: ${TEAM_INVITATION_SECRET}
-    depends_on:
-      - traefik
-    networks:
-      - obtura_dev
-
-  core-api:
-    build:
-      context: ./api-layer/core-api
-      dockerfile: Dockerfile.dev
-    container_name: obtura-core-api
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.core-api.rule=PathPrefix(`/backend`)
-      - traefik.http.routers.core-api.entrypoints=web
-      - traefik.http.routers.core-api.priority=20
-      - traefik.http.middlewares.strip-backend.stripprefix.prefixes=/backend
-      - traefik.http.routers.core-api.middlewares=strip-backend
-    ports:
-      - "7070:7070"
-    volumes:
-      - ./api-layer/core-api:/app
-      - /app/node_modules
-    environment:
-      NODE_ENV: development
-      ENV_ENCRYPTION_KEY: ${ENV_ENCRYPTION_KEY}
-      POSTGRESQL_HOST: postgres
-      POSTGRESQL_PORT: 5432
-      POSTGRESQL_DATABASE: obtura_db
-      POSTGRESQL_USER: alx
-      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD}
-      REDIS_URL: redis://redis:6379
-      RABBITMQ_PROTOCOL: amqp
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      ACCOUNT_SECRET: ${AUTH_SECRET}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      FRONTEND_URL: http://localhost
-      EMAIL_USERNAME: ${EMAIL_USERNAME}
-      EMAIL_PASS: ${EMAIL_PASS}
-      CHANGE_GMAIL_SECRET: ${CHANGE_GMAIL_SECRET}
-      TEAM_INVITATION_SECRET: ${TEAM_INVITATION_SECRET}
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-      postgres:
-        condition: service_started
-      redis:
-        condition: service_started
-      traefik:
-        condition: service_started
-    restart: unless-stopped
-    networks:
-      - obtura_dev
-
-  postgres:
-    image: postgres:18-alpine
-    container_name: obtura-postgres
-    environment:
-      POSTGRES_USER: alx
-      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD}
-      POSTGRES_DB: obtura_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U alx -d obtura_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - obtura_dev
-
-  redis:
-    image: redis:7-alpine
-    container_name: obtura-redis
-    restart: unless-stopped
-    networks:
-      - obtura_dev
-
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    container_name: obtura-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-    healthcheck:
-      test: rabbitmq-diagnostics -q ping
-      interval: 10s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - obtura_dev
-
-  minio:
-    image: minio/minio:latest
-    container_name: obtura-minio
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: server /data --console-address ":9001"
-    restart: unless-stopped
-    networks:
-      - obtura_dev
-
-volumes:
-  postgres_data:
-  redis_data:
-  rabbitmq_data:
-  minio_data:
-EOF
+                    # Ensure Docker secrets exist (run once manually to create)
+                    echo "Verifying Docker secrets..."
+                    docker secret ls | grep obtura_ || echo "Secrets need to be created manually first"
                 '''
             }
         }
 
-        stage('Docker Build') {
+        stage('Deploy') {
             steps {
-                sh "docker compose -f ${COMPOSE_FILE} build --no-cache"
+                script {
+                    sh """
+                        export VERSION=${VERSION}
+                        export DOMAIN=\${DOMAIN}
+                        export ACME_EMAIL=\${ACME_EMAIL}
+                        
+                        # Pull latest images
+                        docker compose -f ${COMPOSE_FILE} pull
+                        
+                        # Deploy with zero-downtime
+                        docker compose -f ${COMPOSE_FILE} up -d --remove-orphans
+                        
+                        # Wait for deployment
+                        echo "Waiting for services to start..."
+                        sleep 20
+                    """
+                }
             }
         }
 
-        stage('Deploy Stack') {
+        stage('Health Check') {
             steps {
-                sh """
-                  docker compose -f ${COMPOSE_FILE} down
-                  docker compose -f ${COMPOSE_FILE} up -d
-                """
+                script {
+                    def services = [
+                        'obtura-frontend': 'http://localhost:3000/api/health',
+                        'obtura-core-api': 'http://localhost:7070/health',
+                        'obtura-payment-service': 'http://localhost:5080/health',
+                        'obtura-build-service': 'http://localhost:5050/health',
+                        'obtura-deploy-service': 'http://localhost:5070/health',
+                        'obtura-monitoring-service': 'http://localhost:5110/health'
+                    ]
+                    
+                    services.each { service, endpoint ->
+                        sh """
+                            echo "Checking health for ${service}..."
+                            for i in \$(seq 1 6); do
+                                if docker ps --format "{{.Names}}" | grep -q "${service}"; then
+                                    if docker inspect --format='{{.State.Health.Status}}' ${service} 2>/dev/null | grep -q "healthy"; then
+                                        echo "✓ ${service} is healthy"
+                                        exit 0
+                                    fi
+                                fi
+                                echo "Attempt \$i/6: ${service} not ready yet..."
+                                sleep 10
+                            done
+                            echo "✗ ${service} failed health check"
+                            exit 1
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Smoke Tests') {
+            steps {
+                sh '''
+                    echo "Running smoke tests..."
+                    curl -sf http://localhost:80 || exit 1
+                    echo "✓ Frontend accessible"
+                    
+                    curl -sf http://localhost:80/backend/health || exit 1
+                    echo "✓ Core API accessible"
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "✔ Test environment deployed successfully."
+            script {
+                def duration = currentBuild.durationString.replace(' and counting', '')
+                echo """
+                ╔════════════════════════════════════════╗
+                ║     Deployment Successful! ✅          ║
+                ╠════════════════════════════════════════╣
+                ║  Version: ${VERSION}                   ║
+                ║  Commit: ${env.GIT_COMMIT_SHORT}       ║
+                ║  Duration: ${duration}                 ║
+                ╚════════════════════════════════════════╝
+                """
+            }
         }
         failure {
-            echo "❌ Deployment failed — check logs."
+            script {
+                echo """
+                ╔════════════════════════════════════════╗
+                ║     Deployment Failed! ❌              ║
+                ╠════════════════════════════════════════╣
+                ║  Version: ${VERSION}                   ║
+                ║  Commit: ${env.GIT_COMMIT_SHORT}       ║
+                ╚════════════════════════════════════════╝
+                """
+                
+                sh """
+                    echo "=== Container Status ==="
+                    docker compose -f ${COMPOSE_FILE} ps
+                    
+                    echo "=== Recent Logs ==="
+                    docker compose -f ${COMPOSE_FILE} logs --tail=100 2>&1 || true
+                """
+            }
+        }
+        always {
+            sh '''
+                # Cleanup old images (keep last 5)
+                docker images --format "{{.Repository}}:{{.Tag}}" | \
+                grep -E "obtura-.*:[0-9]+" | \
+                sort -V | \
+                head -n -10 | \
+                xargs -r docker rmi || true
+            '''
+            
+            cleanWs(
+                deleteDirs: true,
+                notFailBuild: true
+            )
+        }
+        cleanup {
+            sh '''
+                # Prune unused resources
+                docker system prune -f --volumes=false || true
+            '''
         }
     }
 }

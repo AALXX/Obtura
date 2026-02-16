@@ -112,8 +112,8 @@ Any disputes will be resolved in the courts of **Bucharest, Romania**.
 
 **MRSA TECH SRL**
 Bucharest, Romania
-📧 not avalable yet
-🌐 not avalable yet
+📧 alexserbwork@gmail.com
+🌐 obtura.dev
 
 ---
 

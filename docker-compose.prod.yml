@@ -1,0 +1,611 @@
+version: "3.8"
+
+networks:
+  obtura_prod:
+    driver: bridge
+    name: obtura_prod
+    internal: false
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: obtura-traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.endpoint=tcp://docker:2376
+      - --providers.docker.tls.cert=/certs/client/client/cert.pem
+      - --providers.docker.tls.key=/certs/client/client/key.pem
+      - --providers.docker.tls.ca=/certs/client/client/ca.pem
+      - --providers.docker.network=obtura_prod
+      - --entryPoints.web.address=:80
+      - --entryPoints.websecure.address=:443
+      - --entryPoints.web.http.redirections.entryPoint.to=websecure
+      - --entryPoints.web.http.redirections.entryPoint.scheme=https
+      - --entryPoints.web.http.redirections.entryPoint.permanent=true
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --api.dashboard=true
+      - --api.dashboard.rule=Host(`traefik.${DOMAIN}`)
+      - --api.dashboard.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}
+      - --log.level=WARN
+      - --accesslog=true
+      - --accesslog.filepath=/var/log/traefik/access.log
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - docker-certs:/certs/client:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro:ro
+      - traefik-certs:/letsencrypt
+      - traefik-logs:/var/log/traefik
+    networks:
+      - obtura_prod
+    depends_on:
+      docker-dind:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    image: ${REGISTRY_URL}/obtura-frontend:${VERSION:-latest}
+    container_name: obtura-frontend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.priority=10"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.services.frontend.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.frontend.loadbalancer.healthcheck.interval=10s"
+    environment:
+      - NODE_ENV=production
+      - BACKEND_URL=http://core-api:7070
+      - NEXT_PUBLIC_BACKEND_URL=https://${DOMAIN}/backend
+      - NEXT_PUBLIC_BUILD_SERVICE_URL=https://${DOMAIN}/build-service/api
+      - NEXT_PUBLIC_DEPLOY_SERVICE_URL=https://${DOMAIN}/deploy-service/api
+      - NEXT_PUBLIC_PAYMENT_SERVICE_URL=https://${DOMAIN}/payment-service
+      - NEXT_PUBLIC_MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
+      - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+    secrets:
+      - google_client_id
+      - google_client_secret
+      - auth_secret
+      - change_gmail_secret
+      - team_invitation_secret
+    depends_on:
+      - traefik
+      - core-api
+    networks:
+      - obtura_prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  core-api:
+    image: ${REGISTRY_URL}/obtura-core-api:${VERSION:-latest}
+    container_name: obtura-core-api
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.core-api.rule=PathPrefix(`/backend`)"
+      - "traefik.http.routers.core-api.entrypoints=websecure"
+      - "traefik.http.routers.core-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.core-api.priority=20"
+      - "traefik.http.middlewares.strip-backend.stripprefix.prefixes=/backend"
+      - "traefik.http.routers.core-api.middlewares=strip-backend"
+      - "traefik.http.services.core-api.loadbalancer.server.port=7070"
+      - "traefik.http.services.core-api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.core-api.loadbalancer.healthcheck.interval=10s"
+    environment:
+      - NODE_ENV=production
+      - PORT=7070
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_DATABASE=obtura_db
+      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_PROTOCOL=amqp
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_VHOST=/
+      - RABBITMQ_HEARTBEAT=60
+      - RABBITMQ_PREFETCH=10
+      - FRONTEND_URL=https://${DOMAIN}
+      - MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
+      - DEPLOY_SERVICE_URL=https://${DOMAIN}/deploy-service
+    secrets:
+      - postgres_password
+      - postgres_user
+      - env_encryption_key
+      - rabbitmq_user
+      - rabbitmq_password
+      - google_client_id
+      - google_client_secret
+      - auth_secret
+      - change_gmail_secret
+      - team_invitation_secret
+      - email_username
+      - email_password
+      - github_app_id
+      - github_app_client_id
+      - github_app_client_secret
+      - github_app_webhook_secret
+      - github_private_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - obtura_prod
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  payment-service:
+    image: ${REGISTRY_URL}/obtura-payment-service:${VERSION:-latest}
+    container_name: obtura-payment-service
+    labels:
+      - "traefik.enable=true"
+      - 'traefik.http.routers.payment-service.rule=PathPrefix(`/payment-service`)'
+      - "traefik.http.routers.payment-service.entrypoints=websecure"
+      - "traefik.http.routers.payment-service.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.payment-service.priority=20"
+      - "traefik.http.middlewares.strip-payment-service.stripprefix.prefixes=/payment-service"
+      - "traefik.http.routers.payment-service.middlewares=strip-payment-service"
+      - "traefik.http.services.payment-service.loadbalancer.server.port=5080"
+      - "traefik.http.services.payment-service.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.payment-service.loadbalancer.healthcheck.interval=10s"
+    environment:
+      - NODE_ENV=production
+      - PORT=5080
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_DATABASE=obtura_db
+      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_PROTOCOL=amqp
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_VHOST=/
+      - FRONTEND_URL=https://${DOMAIN}
+    secrets:
+      - postgres_password
+      - postgres_user
+      - env_encryption_key
+      - rabbitmq_user
+      - rabbitmq_password
+      - stripe_secret_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - obtura_prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  build-service:
+    image: ${REGISTRY_URL}/obtura-build-service:${VERSION:-latest}
+    container_name: obtura-build-service
+    labels:
+      - "traefik.enable=true"
+      - 'traefik.http.routers.build-service.rule=PathPrefix(`/build-service`)'
+      - "traefik.http.routers.build-service.entrypoints=websecure"
+      - "traefik.http.routers.build-service.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.build-service.priority=20"
+      - "traefik.http.middlewares.strip-build-service.stripprefix.prefixes=/build-service"
+      - "traefik.http.routers.build-service.middlewares=strip-build-service"
+      - "traefik.http.services.build-service.loadbalancer.server.port=5050"
+      - "traefik.http.services.build-service.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.build-service.loadbalancer.healthcheck.interval=10s"
+    environment:
+      - GO_ENV=production
+      - PORT=5050
+      - CORE_API_URL=http://core-api:7070
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_DATABASE=obtura_db
+      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_USE_SSL=false
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_CERT_PATH=/certs/client/client
+      - MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
+    secrets:
+      - postgres_password
+      - postgres_user
+      - env_encryption_key
+      - rabbitmq_url
+      - registry_username
+      - registry_password
+      - minio_access_key
+      - minio_secret_key
+    volumes:
+      - build-tmp:/app/tmp
+      - docker-certs:/certs/client:ro
+    depends_on:
+      docker-dind:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - obtura_prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  deploy-service:
+    image: ${REGISTRY_URL}/obtura-deploy-service:${VERSION:-latest}
+    container_name: obtura-deploy-service
+    labels:
+      - "traefik.enable=true"
+      - 'traefik.http.routers.deploy-service.rule=PathPrefix(`/deploy-service`)'
+      - "traefik.http.routers.deploy-service.entrypoints=websecure"
+      - "traefik.http.routers.deploy-service.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.deploy-service.priority=20"
+      - "traefik.http.middlewares.strip-deploy-service.stripprefix.prefixes=/deploy-service"
+      - "traefik.http.routers.deploy-service.middlewares=strip-deploy-service"
+      - "traefik.http.services.deploy-service.loadbalancer.server.port=5070"
+      - "traefik.http.services.deploy-service.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.deploy-service.loadbalancer.healthcheck.interval=10s"
+    environment:
+      - GO_ENV=production
+      - PORT=5070
+      - CORE_API_URL=http://core-api:7070
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_DATABASE=obtura_db
+      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_USE_SSL=false
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_CERT_PATH=/certs/client/client
+      - MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
+    secrets:
+      - postgres_password
+      - postgres_user
+      - env_encryption_key
+      - rabbitmq_url
+      - registry_username
+      - registry_password
+      - minio_access_key
+      - minio_secret_key
+    volumes:
+      - deploy-tmp:/app/tmp
+      - docker-certs:/certs/client:ro
+      - traefik-dynamic:/etc/traefik/dynamic
+    depends_on:
+      docker-dind:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - obtura_prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  monitoring-service:
+    image: ${REGISTRY_URL}/obtura-monitoring-service:${VERSION:-latest}
+    container_name: obtura-monitoring-service
+    labels:
+      - "traefik.enable=true"
+      - 'traefik.http.routers.monitoring-service.rule=PathPrefix(`/monitoring-service`)'
+      - "traefik.http.routers.monitoring-service.entrypoints=websecure"
+      - "traefik.http.routers.monitoring-service.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.monitoring-service-timeout.timeout=3600s"
+      - "traefik.http.routers.monitoring-service.middlewares=strip-monitoring-service,monitoring-service-timeout"
+      - "traefik.http.services.monitoring-service.loadbalancer.server.port=5110"
+      - "traefik.http.services.monitoring-service.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.monitoring-service.loadbalancer.healthcheck.interval=10s"
+    environment:
+      - GO_ENV=production
+      - PORT=5110
+      - CORE_API_URL=http://core-api:7070
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_DATABASE=obtura_db
+      - POSTGRESQL_USER_FILE=/run/secrets/postgres_user
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_USE_SSL=false
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_CERT_PATH=/certs/client/client
+    secrets:
+      - postgres_password
+      - postgres_user
+      - env_encryption_key
+      - rabbitmq_url
+      - minio_access_key
+      - minio_secret_key
+    volumes:
+      - docker-certs:/certs/client:ro
+      - traefik-logs:/var/log/traefik:ro
+    depends_on:
+      docker-dind:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - obtura_prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: obtura-postgres
+    environment:
+      - POSTGRES_USER_FILE=/run/secrets/postgres_user
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - POSTGRES_DB=obtura_db
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    secrets:
+      - postgres_user
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backups:/backups
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/postgres_user) -d obtura_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - obtura_prod
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    container_name: obtura-redis
+    command: >
+      redis-server
+      --save 60 1
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - obtura_prod
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  rabbitmq:
+    image: rabbitmq:4-alpine
+    container_name: obtura-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER_FILE=/run/secrets/rabbitmq_user
+      - RABBITMQ_DEFAULT_PASS_FILE=/run/secrets/rabbitmq_password
+      - RABBITMQ_DEFAULT_VHOST=/
+    secrets:
+      - rabbitmq_user
+      - rabbitmq_password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - obtura_prod
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  minio:
+    image: minio/minio:latest
+    container_name: obtura-minio
+    environment:
+      - MINIO_ROOT_USER_FILE=/run/secrets/minio_access_key
+      - MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio_secret_key
+    secrets:
+      - minio_access_key
+      - minio_secret_key
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - obtura_prod
+
+  docker-dind:
+    image: docker:27-dind
+    container_name: obtura-docker-dind
+    hostname: docker
+    privileged: true
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - docker-certs:/certs
+      - docker-data:/var/lib/docker
+    command:
+      - --storage-driver=overlay2
+      - --max-concurrent-uploads=1
+      - --max-concurrent-downloads=3
+    security_opt:
+      - apparmor=unconfined
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=2g
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      obtura_prod:
+        aliases:
+          - docker
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+
+volumes:
+  postgres_data:
+    driver: local
+  postgres_backups:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  minio_data:
+    driver: local
+  docker-certs:
+    driver: local
+  docker-data:
+    driver: local
+  traefik-certs:
+    driver: local
+  traefik-logs:
+    driver: local
+  traefik-dynamic:
+    driver: local
+  build-tmp:
+    driver: local
+  deploy-tmp:
+    driver: local
+
+secrets:
+  postgres_user:
+    external: true
+  postgres_password:
+    external: true
+  env_encryption_key:
+    external: true
+  rabbitmq_user:
+    external: true
+  rabbitmq_password:
+    external: true
+  rabbitmq_url:
+    external: true
+  google_client_id:
+    external: true
+  google_client_secret:
+    external: true
+  auth_secret:
+    external: true
+  change_gmail_secret:
+    external: true
+  team_invitation_secret:
+    external: true
+  email_username:
+    external: true
+  email_password:
+    external: true
+  github_app_id:
+    external: true
+  github_app_client_id:
+    external: true
+  github_app_client_secret:
+    external: true
+  github_app_webhook_secret:
+    external: true
+  github_private_key:
+    external: true
+  stripe_secret_key:
+    external: true
+  stripe_publishable_key:
+    external: true
+  registry_username:
+    external: true
+  registry_password:
+    external: true
+  minio_access_key:
+    external: true
+  minio_secret_key:
+    external: true
+  traefik_dashboard_auth:
+    external: true
