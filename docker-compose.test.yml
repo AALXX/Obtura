@@ -99,7 +99,7 @@ services:
   frontend:
     build:
       context: ./client-layer/client
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.dev
     container_name: obtura-frontend
     labels:
       - "traefik.enable=true"
@@ -136,7 +136,7 @@ services:
   core-api:
     build:
       context: ./api-layer/core-api
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.dev
     container_name: obtura-core-api
     labels:
       - "traefik.enable=true"
@@ -205,7 +205,7 @@ services:
   payment-service:
     build:
       context: ./api-layer/payment-service
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.dev
     container_name: obtura-payment-service
     labels:
       - "traefik.enable=true"
@@ -260,7 +260,7 @@ services:
   build-service:
     build:
       context: ./api-layer/build-service
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.dev
     container_name: obtura-build-service
     labels:
       - "traefik.enable=true"
@@ -324,7 +324,7 @@ services:
   deploy-service:
     build:
       context: ./api-layer/deploy-service
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.dev
     container_name: obtura-deploy-service
     volumes:
       - deploy-service-tmp:/app/tmp
@@ -383,7 +383,7 @@ services:
   monitoring-service:
     build:
       context: ./api-layer/monitoring-service
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.dev
     container_name: obtura-monitoring-service
     labels:
       - "traefik.enable=true"
