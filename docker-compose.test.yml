@@ -1,14 +1,43 @@
+# Test Environment - For physical home server deployment
+# Combines local builds with Cloudflare tunnel for external access
+
 networks:
-  obtura_prod:
+  obtura_test:
     driver: bridge
-    name: obtura_prod
+    name: obtura_test
     driver_opts:
-      com.docker.network.bridge.name: obtura_prod
+      com.docker.network.bridge.name: obtura_test
     ipam:
       config:
-        - subnet: 172.21.0.0/16
+        - subnet: 172.22.0.0/16
 
 services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: obtura-cloudflared
+    command: tunnel --config /etc/cloudflared/config.yml --no-autoupdate run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on:
+      - traefik
+    networks:
+      - obtura_test
+    restart: unless-stopped
+
+  coredns:
+    image: coredns/coredns:latest
+    container_name: obtura-coredns
+    command: -conf /etc/coredns/Corefile
+    volumes:
+      - ./infra/dns/Corefile:/etc/coredns/Corefile:ro
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    networks:
+      obtura_test:
+        ipv4_address: 172.22.0.53
+    restart: unless-stopped
+
   traefik:
     image: traefik:v3.6
     container_name: obtura-traefik
@@ -19,23 +48,21 @@ services:
       - --providers.docker.tls.cert=/certs/client/client/cert.pem
       - --providers.docker.tls.key=/certs/client/client/key.pem
       - --providers.docker.tls.ca=/certs/client/client/ca.pem
-      - --providers.docker.network=obtura_prod
+      - --providers.docker.network=obtura_test
       - --entryPoints.web.address=:80
       - --entryPoints.websecure.address=:443
       - --entryPoints.web.http.redirections.entryPoint.to=websecure
       - --entryPoints.web.http.redirections.entryPoint.scheme=https
       - --entryPoints.websecure.http.tls=true
-      - --entryPoints.websecure.http.tls.certResolver=letsencrypt
       - --certificatesResolvers.letsencrypt.acme.tlsChallenge=true
       - --certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}
       - --certificatesResolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --api.dashboard=true
       - --api.insecure=false
       - --ping=true
-      - --log.level=WARN
+      - --log.level=INFO
       - --accesslog=true
       - --accesslog.filepath=/var/log/traefik/access.log
-      - --accesslog.format=json
     ports:
       - "80:80"
       - "443:443"
@@ -44,6 +71,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-letsencrypt:/letsencrypt
       - traefik-logs:/var/log/traefik
+      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infra/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-dynamic:/etc/traefik/dynamic
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)"
@@ -53,10 +83,12 @@ services:
       - "traefik.http.routers.traefik.middlewares=auth@docker"
       - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
     networks:
-      - obtura_prod
+      - obtura_test
     depends_on:
       docker-dind:
         condition: service_healthy
+      coredns:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/ping"]
@@ -76,7 +108,7 @@ services:
       - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
       - "traefik.http.routers.frontend.priority=10"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
-      - "traefik.docker.network=obtura_prod"
+      - "traefik.docker.network=obtura_test"
       - "traefik.http.services.frontend.loadbalancer.healthcheck.path=/api/health"
       - "traefik.http.services.frontend.loadbalancer.healthcheck.interval=10s"
     environment:
@@ -98,7 +130,7 @@ services:
     depends_on:
       - traefik
     networks:
-      - obtura_prod
+      - obtura_test
     restart: unless-stopped
 
   core-api:
@@ -115,7 +147,7 @@ services:
       - "traefik.http.middlewares.strip-backend.stripprefix.prefixes=/backend"
       - "traefik.http.routers.core-api.middlewares=strip-backend"
       - "traefik.http.services.core-api.loadbalancer.server.port=7070"
-      - "traefik.docker.network=obtura_prod"
+      - "traefik.docker.network=obtura_test"
       - "traefik.http.services.core-api.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.core-api.loadbalancer.healthcheck.interval=10s"
     volumes:
@@ -162,7 +194,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:7070/health"]
       interval: 30s
@@ -184,7 +216,7 @@ services:
       - "traefik.http.middlewares.strip-payment-service.stripprefix.prefixes=/payment-service"
       - "traefik.http.routers.payment-service.middlewares=strip-payment-service"
       - "traefik.http.services.payment-service.loadbalancer.server.port=5080"
-      - "traefik.docker.network=obtura_prod"
+      - "traefik.docker.network=obtura_test"
       - "traefik.http.services.payment-service.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.payment-service.loadbalancer.healthcheck.interval=10s"
     environment:
@@ -217,7 +249,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5080/health"]
       interval: 30s
@@ -239,7 +271,7 @@ services:
       - "traefik.http.middlewares.strip-build-service.stripprefix.prefixes=/build-service"
       - "traefik.http.routers.build-service.middlewares=strip-build-service"
       - "traefik.http.services.build-service.loadbalancer.server.port=5050"
-      - "traefik.docker.network=obtura_prod"
+      - "traefik.docker.network=obtura_test"
       - "traefik.http.services.build-service.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.build-service.loadbalancer.healthcheck.interval=10s"
     volumes:
@@ -281,7 +313,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5050/health"]
       interval: 30s
@@ -307,7 +339,7 @@ services:
       - "traefik.http.middlewares.strip-deploy-service.stripprefix.prefixes=/deploy-service"
       - "traefik.http.routers.deploy-service.middlewares=strip-deploy-service"
       - "traefik.http.services.deploy-service.loadbalancer.server.port=5070"
-      - "traefik.docker.network=obtura_prod"
+      - "traefik.docker.network=obtura_test"
       - "traefik.http.services.deploy-service.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.deploy-service.loadbalancer.healthcheck.interval=10s"
     environment:
@@ -340,7 +372,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5070/health"]
       interval: 30s
@@ -361,7 +393,7 @@ services:
       - "traefik.http.middlewares.monitoring-service-timeout.timeout=3600s"
       - "traefik.http.routers.monitoring-service.middlewares=strip-monitoring-service,monitoring-service-timeout"
       - "traefik.http.services.monitoring-service.loadbalancer.server.port=5110"
-      - "traefik.docker.network=obtura_prod"
+      - "traefik.docker.network=obtura_test"
       - "traefik.http.services.monitoring-service.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.monitoring-service.loadbalancer.healthcheck.interval=10s"
     volumes:
@@ -404,7 +436,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5110/health"]
       interval: 30s
@@ -430,7 +462,7 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
 
   redis:
     image: redis:7-alpine
@@ -446,7 +478,7 @@ services:
       start_period: 5s
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -466,7 +498,7 @@ services:
       start_period: 30s
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
 
   minio:
     image: minio/minio:latest
@@ -485,7 +517,7 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - obtura_prod
+      - obtura_test
 
   docker-dind:
     image: docker:29.2-dind
@@ -501,10 +533,20 @@ services:
       - --storage-driver=overlay2
       - --max-concurrent-uploads=1
       - --max-concurrent-downloads=3
+      - --dns=172.22.0.53
+      - --dns=8.8.8.8
+      - --dns-search=.
     security_opt:
       - apparmor=unconfined
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=2g
+    dns:
+      - 172.22.0.53
+      - 8.8.8.8
+    dns_search:
+      - .
+    depends_on:
+      - coredns
     healthcheck:
       test: ["CMD", "docker", "info"]
       interval: 10s
@@ -513,7 +555,7 @@ services:
       start_period: 20s
     restart: unless-stopped
     networks:
-      obtura_prod:
+      obtura_test:
         aliases:
           - docker
           - docker-host
@@ -535,9 +577,9 @@ volumes:
     driver: local
   traefik-logs:
     driver: local
+  traefik-dynamic:
+    driver: local
   build-service-tmp:
     driver: local
   deploy-service-tmp:
-    driver: local
-  traefik-dynamic:
     driver: local
