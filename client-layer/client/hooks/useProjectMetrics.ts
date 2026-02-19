@@ -48,11 +48,13 @@ export function useProjectMetricsUpdates(projectId: string, timeRange: string = 
   const projectIdRef = useRef(projectId)
   const timeRangeRef = useRef(timeRange)
   const hasReceivedDataRef = useRef(false)
+  const timeRangeKeyRef = useRef(timeRange)
 
   projectIdRef.current = projectId
   timeRangeRef.current = timeRange
+  timeRangeKeyRef.current = timeRange
 
-  const connectSSE = useCallback(() => {
+  const connectSSE = useCallback((forcedTimeRange?: string) => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
     }
@@ -60,8 +62,9 @@ export function useProjectMetricsUpdates(projectId: string, timeRange: string = 
     connectedRef.current = false
     hasReceivedDataRef.current = false
     const currentProjectId = projectIdRef.current
-    const currentTimeRange = timeRangeRef.current
+    const currentTimeRange = forcedTimeRange || timeRangeRef.current
 
+    console.log('[metrics] connectSSE using timeRange:', currentTimeRange, 'forced:', forcedTimeRange)
     const url = `${MONITORING_SERVICE_URL}/api/projects/${currentProjectId}/metrics/sse?timeRange=${currentTimeRange}`
     console.log('[metrics] SSE connecting to:', url)
     
@@ -113,18 +116,23 @@ export function useProjectMetricsUpdates(projectId: string, timeRange: string = 
       if (state === EventSource.CLOSED) {
         setIsConnected(false)
         
+        // Only reconnect if timeRange hasn't changed - pass current timeRange explicitly
         if (hasReceivedDataRef.current && reconnectAttemptsRef.current < 3) {
           reconnectAttemptsRef.current++
           const delay = 2000
-          console.log(`[metrics] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
-          reconnectTimeoutRef.current = setTimeout(() => connectSSE(), delay)
+          const currentTimeRange = timeRangeKeyRef.current
+          console.log(`[metrics] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current}, timeRange: ${currentTimeRange})`)
+          reconnectTimeoutRef.current = setTimeout(() => connectSSE(currentTimeRange), delay)
+        } else {
+          console.log('[metrics] Skipping reconnect')
         }
       }
     }
   }, [])
 
   useEffect(() => {
-    connectSSE()
+    reconnectAttemptsRef.current = 0
+    connectSSE(timeRange)
 
     return () => {
       console.log('[metrics] Cleanup: closing SSE connection')
@@ -137,7 +145,7 @@ export function useProjectMetricsUpdates(projectId: string, timeRange: string = 
       }
       setIsConnected(false)
     }
-  }, [connectSSE])
+  }, [timeRange, connectSSE])
 
   return {
     metrics,

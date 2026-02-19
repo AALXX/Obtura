@@ -16,6 +16,7 @@ import DeploymentLogsViewer from './components/DeploymentLogsViewer'
 import DeploymentSettings from './components/DeploymentSettings'
 import MonitoringDashboard from './components/MonitoringDashboard'
 import { useDeploymentUpdates } from '@/hooks/useDeployuseDeploymentUpdates'
+import CreateServiceDialog from './components/CreateServiceDialog'
 
 const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; services: { service_name: string; env_vars: Record<string, string> }[] }> = ({ projectData, accessToken, services }) => {
     const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'deploymentHistory' | 'environment' | 'settings' | 'monitoring' | 'builds'>('overview')
@@ -48,6 +49,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
     // Deploy dialog state
     const [showDeployDialog, setShowDeployDialog] = useState(false)
+    const [showCreateServiceDialog, setShowCreateServiceDialog] = useState(false)
     const [deployEnvironment, setDeployEnvironment] = useState('')
     const [selectedBranch, setSelectedBranch] = useState(projectData.production?.branch || 'main')
     const [deploymentStrategy, setDeploymentStrategy] = useState(projectData.production?.deploymentStrategy || 'blue_green')
@@ -668,6 +670,14 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                     </>
                                 )}
                             </button>
+
+                            <button
+                                onClick={() => setShowCreateServiceDialog(true)}
+                                className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
+                            >
+                                <Layers size={18} />
+                                Create Service
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -726,6 +736,20 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             {showDeployDialog && (
                 <DialogCanvas closeDialog={() => setShowDeployDialog(false)}>
                     <DeployDialog accessToken={accessToken} projectId={projectData.id} gitRepoUrl={projectData.gitRepoUrl} builds={liveBuilds} currentBranch={productionEnv?.branch || stagingEnv?.branch || 'main'} deploymentStrategy={productionEnv?.deploymentStrategy || 'blue_green'} onDeploy={handleDeploy} onClose={() => setShowDeployDialog(false)} />
+                </DialogCanvas>
+            )}
+
+            {showCreateServiceDialog && (
+                <DialogCanvas closeDialog={() => setShowCreateServiceDialog(false)}>
+                    <CreateServiceDialog
+                        projectId={projectData.id}
+                        accessToken={accessToken}
+                        onClose={() => setShowCreateServiceDialog(false)}
+                        onServiceCreated={(service) => {
+                            console.log('Service created:', service)
+                            // Refresh services list or show success notification
+                        }}
+                    />
                 </DialogCanvas>
             )}
 

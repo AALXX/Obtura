@@ -971,7 +971,6 @@ type ProjectMetricsResponse struct {
 	LatencyDistribution []metrics.LatencyBucket     `json:"latencyDistribution,omitempty"`
 	StatusCodes         []StatusCodeStat            `json:"statusCodes,omitempty"`
 	Endpoints           []metrics.EndpointStat      `json:"endpoints,omitempty"`
-	GeographicData      []metrics.GeoStat           `json:"geographicData,omitempty"`
 	HeatmapData         []HeatmapPoint              `json:"heatmapData,omitempty"`
 	RequestsData        []metrics.RequestsDataPoint `json:"requestsData,omitempty"`
 }
@@ -1045,12 +1044,11 @@ func (s *Server) handleGetProjectMetrics(c *gin.Context) {
 		httpMetrics, err := s.getHTTPMetrics(ctx, *prodDeployment, timeRange)
 		if err != nil {
 			logger.Error("Failed to get HTTP metrics", zap.String("deployment_id", *prodDeployment), logger.Err(err))
-			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData", "requestsData")
+			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "heatmapData", "requestsData")
 		} else {
 			response.LatencyDistribution = httpMetrics.LatencyDistribution
 			response.StatusCodes = httpMetrics.StatusCodes
 			response.Endpoints = httpMetrics.Endpoints
-			response.GeographicData = httpMetrics.GeographicData
 			response.HeatmapData = httpMetrics.HeatmapData
 			response.RequestsData = httpMetrics.RequestsData
 
@@ -1062,9 +1060,6 @@ func (s *Server) handleGetProjectMetrics(c *gin.Context) {
 			}
 			if len(httpMetrics.Endpoints) > 0 {
 				available = append(available, "endpoints")
-			}
-			if len(httpMetrics.GeographicData) > 0 {
-				available = append(available, "geographicData")
 			}
 			if len(httpMetrics.HeatmapData) > 0 {
 				available = append(available, "heatmapData")
@@ -1321,7 +1316,6 @@ type HTTPMetricsData struct {
 	LatencyDistribution []metrics.LatencyBucket
 	StatusCodes         []StatusCodeStat
 	Endpoints           []metrics.EndpointStat
-	GeographicData      []metrics.GeoStat
 	HeatmapData         []HeatmapPoint
 	RequestsData        []metrics.RequestsDataPoint
 }
@@ -1409,37 +1403,6 @@ func (s *Server) getHTTPMetrics(ctx context.Context, deploymentID string, timeRa
 			if err := endpointsRows.Scan(&e.Path, &e.Method, &e.RequestCount, &e.AvgLatency, &errorRate); err == nil {
 				e.ErrorRate = fmt.Sprintf("%.2f", errorRate)
 				data.Endpoints = append(data.Endpoints, e)
-			}
-		}
-	}
-
-	// Get geographic distribution - use container region as placeholder
-	geoQuery := `
-		SELECT 
-			'US' as country_code,
-			'Unknown' as region,
-			SUM(request_count) as request_count
-		FROM http_metrics_minute
-		WHERE deployment_id = $1 
-		  AND timestamp_minute >= NOW() - $2::interval
-		GROUP BY deployment_id
-		ORDER BY request_count DESC
-		LIMIT 10
-	`
-	geoRows, err := s.orchestrator.GetDB().QueryContext(ctx, geoQuery, deploymentID, interval)
-	if err == nil {
-		defer geoRows.Close()
-		totalRequests := 0
-		for geoRows.Next() {
-			var g metrics.GeoStat
-			if err := geoRows.Scan(&g.CountryCode, &g.Region, &g.Requests); err == nil {
-				totalRequests += g.Requests
-				data.GeographicData = append(data.GeographicData, g)
-			}
-		}
-		for i := range data.GeographicData {
-			if totalRequests > 0 {
-				data.GeographicData[i].Percentage = (data.GeographicData[i].Requests * 100) / totalRequests
 			}
 		}
 	}
@@ -1651,12 +1614,11 @@ func (s *Server) sendProjectMetricsEvent(c *gin.Context, flusher http.Flusher, p
 		httpMetrics, err := s.getHTTPMetrics(ctx, *prodID, timeRange)
 		if err != nil {
 			logger.Error("Failed to get SSE HTTP metrics", zap.String("deployment_id", *prodID), logger.Err(err))
-			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "geographicData", "heatmapData", "requestsData")
+			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "heatmapData", "requestsData")
 		} else {
 			response.LatencyDistribution = httpMetrics.LatencyDistribution
 			response.StatusCodes = httpMetrics.StatusCodes
 			response.Endpoints = httpMetrics.Endpoints
-			response.GeographicData = httpMetrics.GeographicData
 			response.HeatmapData = httpMetrics.HeatmapData
 			response.RequestsData = httpMetrics.RequestsData
 
@@ -1668,9 +1630,6 @@ func (s *Server) sendProjectMetricsEvent(c *gin.Context, flusher http.Flusher, p
 			}
 			if len(httpMetrics.Endpoints) > 0 {
 				available = append(available, "endpoints")
-			}
-			if len(httpMetrics.GeographicData) > 0 {
-				available = append(available, "geographicData")
 			}
 			if len(httpMetrics.HeatmapData) > 0 {
 				available = append(available, "heatmapData")

@@ -119,6 +119,7 @@ func (c *TraefikCollector) loadDeploymentMapping(ctx context.Context) error {
 }
 
 type TraefikLogEntry struct {
+	ClientAddr       string `json:"ClientAddr"`
 	RequestAddr      string `json:"RequestAddr"`
 	RequestHost      string `json:"RequestHost"`
 	RequestMethod    string `json:"RequestMethod"`
@@ -187,6 +188,7 @@ func (c *TraefikCollector) processLogs(ctx context.Context) error {
 			StatusCode:   traefikEntry.DownstreamStatus,
 			ResponseTime: traefikEntry.Duration,
 			Timestamp:    ts,
+			ClientIP:     traefikEntry.ClientAddr,
 		}
 
 		// Match domain to deployment
@@ -238,6 +240,11 @@ func (c *TraefikCollector) processLogs(ctx context.Context) error {
 			logger.Error("Failed to store log entries", zap.Error(err))
 		}
 		logger.Info("Stored remaining HTTP metrics entries", zap.Int("count", len(entries)))
+
+		// Store sampled requests for geographic data
+		if err := c.storeSampledRequests(ctx, entries); err != nil {
+			logger.Error("Failed to store sampled requests", zap.Error(err))
+		}
 	}
 
 	newPos, _ := file.Seek(0, 1)
@@ -378,6 +385,70 @@ func (c *TraefikCollector) storeEntries(ctx context.Context, entries []LogEntry)
 		)
 		if err != nil {
 			log.Printf("Failed to store HTTP metric: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func (c *TraefikCollector) storeSampledRequests(ctx context.Context, entries []LogEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Sample 1% of requests to store with client IP for geo data
+	sampleQuery := `
+		INSERT INTO http_requests_sampled 
+			(deployment_id, timestamp, method, path, path_normalized, status_code, latency_ms, 
+			 request_size, response_size, client_ip, country_code, region, city, router_name, service_name)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT DO NOTHING
+	`
+
+	for _, e := range entries {
+		// Only store 1% of requests to avoid too much data
+		if time.Now().UnixNano()%100 != 0 {
+			continue
+		}
+
+		// Parse client IP (remove port if present)
+		clientIP := e.ClientIP
+		if idx := strings.LastIndex(clientIP, ":"); idx > 0 {
+			clientIP = clientIP[:idx]
+		}
+
+		// Skip internal IPs
+		if strings.HasPrefix(clientIP, "172.20.") || strings.HasPrefix(clientIP, "172.21.") ||
+			strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") ||
+			strings.HasPrefix(clientIP, "127.") {
+			continue
+		}
+
+		// Simple path normalization
+		pathNormalized := e.Path
+		if idx := strings.Index(pathNormalized, "?"); idx > 0 {
+			pathNormalized = pathNormalized[:idx]
+		}
+
+		_, err := c.db.ExecContext(ctx, sampleQuery,
+			e.DeploymentID,
+			e.Timestamp,
+			e.Method,
+			e.Path,
+			pathNormalized,
+			e.StatusCode,
+			e.ResponseTime/1000000,
+			e.RequestSize,
+			e.ResponseSize,
+			clientIP,
+			"", // country_code - would need GeoIP lookup
+			"", // region
+			"", // city
+			"", // router_name
+			"", // service_name
+		)
+		if err != nil {
+			logger.Error("Failed to store sampled request", zap.Error(err))
 		}
 	}
 

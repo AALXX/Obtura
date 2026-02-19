@@ -82,8 +82,8 @@ func main() {
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.Port),
 		Handler:      apiServer.Router(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 0, // Disabled for SSE - connections are long-lived
 		IdleTimeout:  60 * time.Second,
 	}
 

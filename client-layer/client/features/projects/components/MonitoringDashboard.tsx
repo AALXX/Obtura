@@ -33,7 +33,6 @@ interface MetricData {
     latencyDistribution?: { bucket: string; count: number }[]
     statusCodes?: { code: string; count: number; label: string }[]
     endpoints?: { path?: string; endpoint?: string; requestCount?: number; requests?: number; avgLatency: number; errorRate: string; method?: string }[]
-    geographicData?: { region: string; requests: number; percentage: number }[]
     heatmapData?: { day: number; hour: number; value: number }[]
     errorTypes?: { type: string; count: number; severity: string }[]
     requestsData?: { time: number; requestsPerMin: number; avgLatency: number; errorRate: number }[]
@@ -109,11 +108,15 @@ const LineChart: React.FC<{
     height?: number
     showArea?: boolean
     valueFormatter?: (value: number) => string
-}> = ({ data, color, height = 200, showArea = true, valueFormatter = (v) => v.toString() }) => {
+    animate?: boolean
+}> = ({ data, color, height = 200, showArea = true, valueFormatter = (v) => v.toString(), animate = true }) => {
     const svgRef = useRef<SVGSVGElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const [dimensions, setDimensions] = useState({ width: 800, height })
     const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, title: '', value: 0, time: 0 })
+    const hasAnimated = useRef(false)
+
+    const shouldAnimate = animate && !hasAnimated.current
 
     useEffect(() => {
         const updateDimensions = () => {
@@ -202,10 +205,22 @@ const LineChart: React.FC<{
                 .attr('stop-color', color)
                 .attr('stop-opacity', 0)
 
-            g.append('path')
-                .datum(data)
-                .attr('fill', `url(#${gradientId})`)
-                .attr('d', area)
+            if (shouldAnimate) {
+                hasAnimated.current = true
+                g.append('path')
+                    .datum(data)
+                    .attr('fill', `url(#${gradientId})`)
+                    .attr('d', area)
+                    .attr('opacity', 0)
+                    .transition()
+                    .duration(750)
+                    .attr('opacity', 1)
+            } else {
+                g.append('path')
+                    .datum(data)
+                    .attr('fill', `url(#${gradientId})`)
+                    .attr('d', area)
+            }
         }
 
         // Line
@@ -214,12 +229,24 @@ const LineChart: React.FC<{
             .y(d => yScale(d.value))
             .curve(d3.curveMonotoneX)
 
-        g.append('path')
+        const linePath = g.append('path')
             .datum(data)
             .attr('fill', 'none')
             .attr('stroke', color)
             .attr('stroke-width', 2)
             .attr('d', line)
+
+        if (shouldAnimate) {
+            hasAnimated.current = true
+            const totalLength = linePath.node()?.getTotalLength() || 0
+            linePath
+                .attr('stroke-dasharray', totalLength)
+                .attr('stroke-dashoffset', totalLength)
+                .transition()
+                .duration(1000)
+                .ease(d3.easeLinear)
+                .attr('stroke-dashoffset', 0)
+        }
 
         // X Axis
         const xAxis = g.append('g')
@@ -338,11 +365,13 @@ const BarChart: React.FC<{
     data: { label: string; value: number; color?: string }[]
     height?: number
     horizontal?: boolean
-}> = ({ data, height = 200, horizontal = false }) => {
+    animate?: boolean
+}> = ({ data, height = 200, horizontal = false, animate = true }) => {
     const svgRef = useRef<SVGSVGElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const [dimensions, setDimensions] = useState({ width: 800, height })
     const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, label: '', value: 0 })
+    const hasAnimated = useRef(false)
 
     useEffect(() => {
         const updateDimensions = () => {
@@ -417,9 +446,15 @@ const BarChart: React.FC<{
                     setTooltip(prev => ({ ...prev, visible: false }))
                 })
 
-            bars.transition()
-                .duration(750)
-                .attr('width', d => xScale(d.value))
+            // Animate only on first render
+            if (hasAnimated.current && animate) {
+                hasAnimated.current = false
+                bars.transition()
+                    .duration(750)
+                    .attr('width', d => xScale(d.value))
+            } else {
+                bars.attr('width', d => xScale(d.value))
+            }
 
             // X Axis
             const xAxis = g.append('g')
@@ -482,10 +517,17 @@ const BarChart: React.FC<{
                     setTooltip(prev => ({ ...prev, visible: false }))
                 })
 
-            bars.transition()
-                .duration(750)
-                .attr('y', d => yScale(d.value))
-                .attr('height', d => innerHeight - yScale(d.value))
+            // Animate only on first render
+            if (hasAnimated.current && animate) {
+                hasAnimated.current = false
+                bars.transition()
+                    .duration(750)
+                    .attr('y', d => yScale(d.value))
+                    .attr('height', d => innerHeight - yScale(d.value))
+            } else {
+                bars.attr('y', d => yScale(d.value))
+                    .attr('height', d => innerHeight - yScale(d.value))
+            }
 
             // X Axis
             const xAxis = g.append('g')
@@ -524,6 +566,178 @@ const BarChart: React.FC<{
                 y={tooltip.y}
                 title={tooltip.label}
                 content={<span className="font-semibold">{tooltip.value.toLocaleString()}</span>}
+            />
+        </>
+    )
+}
+
+const TimeBarChart: React.FC<{
+    data: { time: number; value: number }[]
+    color?: string
+    height?: number
+    valueFormatter?: (value: number) => string
+    animate?: boolean
+}> = ({ data, color = '#3b82f6', height = 200, valueFormatter = (v) => v.toString(), animate = true }) => {
+    const svgRef = useRef<SVGSVGElement>(null)
+    const containerRef = useRef<HTMLDivElement>(null)
+    const [dimensions, setDimensions] = useState({ width: 800, height })
+    const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, title: '', value: 0 })
+    const hasAnimated = useRef(false)
+
+    useEffect(() => {
+        const updateDimensions = () => {
+            if (containerRef.current) {
+                const { width } = containerRef.current.getBoundingClientRect()
+                setDimensions({ width: Math.max(width, 300), height })
+            }
+        }
+        updateDimensions()
+        window.addEventListener('resize', updateDimensions)
+        return () => window.removeEventListener('resize', updateDimensions)
+    }, [height])
+
+    const shouldAnimate = animate && !hasAnimated.current
+
+    useEffect(() => {
+        if (!svgRef.current) return
+        if (data.length === 0) {
+            d3.select(svgRef.current).selectAll('*').remove()
+            return
+        }
+
+        const svg = d3.select(svgRef.current)
+        svg.selectAll('*').remove()
+
+        const { width, height } = dimensions
+        const margin = { top: 20, right: 20, bottom: 40, left: 50 }
+        const innerWidth = width - margin.left - margin.right
+        const innerHeight = height - margin.top - margin.bottom
+
+        const xScale = d3.scaleBand()
+            .domain(data.map(d => new Date(d.time).toISOString()))
+            .range([0, innerWidth])
+            .padding(0.2)
+
+        const yScale = d3.scaleLinear()
+            .domain([0, d3.max(data, d => d.value) || 0])
+            .nice()
+            .range([innerHeight, 0])
+
+        const g = svg.append('g')
+            .attr('transform', `translate(${margin.left},${margin.top})`)
+
+        // Gradient
+        const gradientId = `bar-gradient-${Math.random().toString(36).substr(2, 9)}`
+        const defs = svg.append('defs')
+        const gradient = defs.append('linearGradient')
+            .attr('id', gradientId)
+            .attr('gradientUnits', 'userSpaceOnUse')
+            .attr('x1', 0).attr('y1', innerHeight)
+            .attr('x2', 0).attr('y2', 0)
+
+        gradient.append('stop')
+            .attr('offset', '0%')
+            .attr('stop-color', color)
+            .attr('stop-opacity', 0.6)
+
+        gradient.append('stop')
+            .attr('offset', '100%')
+            .attr('stop-color', color)
+            .attr('stop-opacity', 1)
+
+        // Bars
+        g.selectAll('.bar')
+            .data(data)
+            .enter()
+            .append('rect')
+            .attr('class', 'bar')
+            .attr('x', d => xScale(new Date(d.time).toISOString()) || 0)
+            .attr('y', innerHeight)
+            .attr('width', xScale.bandwidth())
+            .attr('height', 0)
+            .attr('fill', `url(#${gradientId})`)
+            .attr('rx', 4)
+            .style('cursor', 'pointer')
+            .on('mouseover', function(event, d) {
+                d3.select(this).attr('opacity', 0.8)
+                const svgElement = svgRef.current
+                if (svgElement) {
+                    const rect = svgElement.getBoundingClientRect()
+                    const barX = (xScale(new Date(d.time).toISOString()) || 0) + margin.left
+                    const barY = yScale(d.value) + margin.top
+                    setTooltip({
+                        visible: true,
+                        x: rect.left + barX + xScale.bandwidth() / 2,
+                        y: rect.top + barY,
+                        title: d3.timeFormat('%H:%M')(new Date(d.time)),
+                        value: d.value
+                    })
+                }
+            })
+            .on('mouseout', function() {
+                d3.select(this).attr('opacity', 1)
+                setTooltip(prev => ({ ...prev, visible: false }))
+            })
+
+        // Only animate on first render
+        if (shouldAnimate) {
+            hasAnimated.current = true
+            g.selectAll('.bar')
+                .attr('y', innerHeight)
+                .attr('height', 0)
+                .transition()
+                .duration(750)
+                .delay((_, i) => i * 30)
+                .attr('y', (d: any) => yScale(d.value))
+                .attr('height', (d: any) => innerHeight - yScale(d.value))
+        } else {
+            g.selectAll('.bar')
+                .attr('y', (d: any) => yScale(d.value))
+                .attr('height', (d: any) => innerHeight - yScale(d.value))
+        }
+
+        // X Axis
+        const xAxis = g.append('g')
+            .attr('transform', `translate(0,${innerHeight})`)
+            .call(d3.axisBottom(xScale)
+                .tickFormat(d => d3.timeFormat('%H:%M')(new Date(d as string)))
+            )
+        xAxis.selectAll('text')
+            .attr('fill', '#71717a')
+            .attr('font-size', '10px')
+            .style('text-anchor', 'end')
+            .attr('dx', '-.8em')
+            .attr('dy', '.15em')
+            .attr('transform', 'rotate(-45)')
+        xAxis.selectAll('line, path')
+            .attr('stroke', '#3f3f46')
+
+        // Y Axis
+        const yAxis = g.append('g')
+            .call(d3.axisLeft(yScale).ticks(5).tickFormat(d => valueFormatter(d as number)))
+        yAxis.selectAll('text')
+            .attr('fill', '#71717a')
+            .attr('font-size', '11px')
+        yAxis.selectAll('line, path')
+            .attr('stroke', '#3f3f46')
+
+    }, [data, dimensions, color, valueFormatter])
+
+    if (data.length === 0) {
+        return <DataUnavailable />
+    }
+
+    return (
+        <>
+            <div ref={containerRef} className="w-full">
+                <svg ref={svgRef} width={dimensions.width} height={dimensions.height} />
+            </div>
+            <Tooltip
+                visible={tooltip.visible}
+                x={tooltip.x}
+                y={tooltip.y}
+                title={tooltip.title}
+                content={<span className="font-semibold">{valueFormatter(tooltip.value)}</span>}
             />
         </>
     )
@@ -806,13 +1020,13 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
     const [isLoading, setIsLoading] = useState(true)
     const [dataError, setDataError] = useState<string | null>(null)
 
-    const fetchInitialMetrics = useCallback(async () => {
+    const fetchInitialMetrics = useCallback(async (range: string) => {
         setIsLoading(true)
         setDataError(null)
         try {
             const monitoringUrl = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost:5110'
             const response = await axios.get<{ data: { metrics: any } }>(
-                `${monitoringUrl}/api/projects/${projectId}/metrics?timeRange=${timeRange}`
+                `${monitoringUrl}/api/projects/${projectId}/metrics?timeRange=${range}`
             )
             if (response.data?.data?.metrics) {
                 setMetricData(response.data.data.metrics)
@@ -823,11 +1037,11 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
         } finally {
             setIsLoading(false)
         }
-    }, [projectId, timeRange])
+    }, [projectId])
 
     useEffect(() => {
-        fetchInitialMetrics()
-    }, [fetchInitialMetrics])
+        fetchInitialMetrics(timeRange)
+    }, [timeRange, fetchInitialMetrics])
 
     const { metrics, isConnected, lastUpdate: hookLastUpdate, error } = useProjectMetricsUpdates(projectId, timeRange)
 
@@ -916,13 +1130,6 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
         return metricData?.endpoints || []
     }, [metricData?.notAvailable, metricData?.endpoints])
 
-    const geographicData = useMemo(() => {
-        if (metricData?.notAvailable?.includes('geographicData')) {
-            return []
-        }
-        return metricData?.geographicData || []
-    }, [metricData?.notAvailable, metricData?.geographicData])
-
     const heatmapData = useMemo(() => {
         if (metricData?.notAvailable?.includes('heatmapData')) {
             return []
@@ -934,10 +1141,10 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
     const latestMemory = timeSeriesData.length > 0 ? timeSeriesData[timeSeriesData.length - 1].memoryUsage : 0
 
     const metricCards: MetricCard[] = useMemo(() => [
-        { label: 'Requests/min', value: productionMetrics?.requestsPerMin?.toString() || 'N/A', change: 0, icon: TrendingUp, color: 'text-blue-500' },
-        { label: 'Response Time', value: productionMetrics?.avgLatency || 'N/A', change: 0, icon: Clock, color: 'text-green-500' },
-        { label: 'Error Rate', value: productionMetrics?.errorRate || 'N/A', change: 0, icon: AlertCircle, color: 'text-red-500' },
-        { label: 'Uptime', value: productionMetrics?.uptime || 'N/A', change: 0, icon: Activity, color: 'text-purple-500' }
+        { label: 'Requests/min', value: productionMetrics?.requestsPerMin?.toString() || 'N/A', change: 0, icon: TrendingUp, color: 'text-blue-300' },
+        { label: 'Response Time', value: productionMetrics?.avgLatency || 'N/A', change: 0, icon: Clock, color: 'text-green-300' },
+        { label: 'Error Rate', value: productionMetrics?.errorRate || 'N/A', change: 0, icon: AlertCircle, color: 'text-red-300' },
+        { label: 'Uptime', value: productionMetrics?.uptime || 'N/A', change: 0, icon: Activity, color: 'text-purple-300' }
     ], [productionMetrics])
 
     const errorTypesData = useMemo(() => {
@@ -1127,61 +1334,35 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                             <h3 className="font-semibold text-white">Request Volume</h3>
                             <span className="text-sm text-zinc-400">{timeRange}</span>
                         </div>
-                        <LineChart 
+                        <TimeBarChart 
                             data={requestsData} 
-                            color="#3b82f6" 
+                            color="#fb923c" 
                             height={250} 
-                            showArea 
-                            valueFormatter={(v) => `${Math.round(v).toLocaleString()} req/min`}
+                            valueFormatter={(v) => `${Math.round(v).toLocaleString()}`}
                         />
                     </div>
 
-                    {/* Geographic Distribution */}
-                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                            <h3 className="mb-4 font-semibold text-white">Geographic Distribution</h3>
-                            <div className="space-y-3">
-                                {geographicData.map((region, idx) => (
-                                    <div key={idx} className="flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
-                                            <Globe size={16} className="text-zinc-500" />
-                                            <span className="text-sm text-zinc-300">{region.region}</span>
-                                        </div>
-                                        <div className="flex items-center gap-4">
-                                            <div className="h-2 w-24 overflow-hidden rounded-full bg-zinc-900">
-                                                <div
-                                                    className="h-full bg-blue-500 transition-all"
-                                                    style={{ width: `${region.percentage}%` }}
-                                                />
-                                            </div>
-                                            <span className="w-12 text-right text-sm text-zinc-400">{region.percentage}%</span>
-                                            <span className="w-16 text-right text-sm font-medium text-zinc-300">
-                                                {region.requests.toLocaleString()}
-                                            </span>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                    {/* Top Endpoints */}
+                    <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
+                        <div className="mb-4 flex items-center justify-between">
+                            <h3 className="font-semibold text-white">Top Endpoints</h3>
+                            <span className="text-sm text-zinc-400">By request volume</span>
                         </div>
-
-                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                            <h3 className="mb-4 font-semibold text-white">Top Endpoints</h3>
-                            <div className="space-y-3">
-                                {endpointsData.map((endpoint, idx) => (
-                                    <div key={idx} className="flex items-center justify-between rounded-lg bg-zinc-900/50 p-3">
-                                        <div>
-                                            <div className="font-mono text-sm text-blue-400">{endpoint.path || endpoint.endpoint || '/'}</div>
-                                            <div className="text-xs text-zinc-500">{(endpoint.requestCount || endpoint.requests || 0).toLocaleString()} requests</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-sm font-medium text-zinc-300">{endpoint.avgLatency}ms</div>
-                                            <div className={`text-xs ${parseFloat(endpoint.errorRate) > 1 ? 'text-red-400' : 'text-green-400'}`}>
-                                                {endpoint.errorRate}% errors
-                                            </div>
+                        <div className="space-y-2">
+                            {endpointsData.map((endpoint, index) => (
+                                <div key={index} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+                                    <div>
+                                        <div className="font-mono text-sm text-blue-400">{endpoint.path || endpoint.endpoint || '/'}</div>
+                                        <div className="text-xs text-zinc-500">{(endpoint.requestCount || endpoint.requests || 0).toLocaleString()} requests</div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-sm font-medium text-zinc-300">{endpoint.avgLatency}ms</div>
+                                        <div className={`text-xs ${parseFloat(endpoint.errorRate) > 1 ? 'text-red-400' : 'text-green-400'}`}>
+                                            {endpoint.errorRate}% errors
                                         </div>
                                     </div>
-                                ))}
-                            </div>
+                                </div>
+                            ))}
                         </div>
                     </div>
 
@@ -1193,6 +1374,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                         </div>
                         <HeatmapChart data={heatmapData} height={180} />
                     </div>
+                    
                 </>
             )}
 
@@ -1205,11 +1387,10 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                             <h3 className="font-semibold text-white">Response Time</h3>
                             <span className="text-sm text-zinc-400">p50, p95, p99</span>
                         </div>
-                        <LineChart 
+                        <TimeBarChart 
                             data={responseTimeData} 
-                            color="#22c55e" 
+                            color="#3b82f6" 
                             height={250} 
-                            showArea 
                             valueFormatter={(v) => `${Math.round(v)}ms`}
                         />
                     </div>
@@ -1219,8 +1400,9 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                         <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
                             <h3 className="mb-4 font-semibold text-white">Latency Distribution</h3>
                             <BarChart
-                                data={latencyData.map(d => ({ label: d.bucket, value: d.count }))}
+                                data={latencyData.map(d => ({ label: d.bucket, value: d.count, color: '#f59e0b' }))}
                                 height={250}
+                                animate={false}
                             />
                         </div>
 
@@ -1295,11 +1477,10 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                             <h3 className="font-semibold text-white">Error Rate Over Time</h3>
                             <span className="text-sm text-zinc-400">{projectData.metrics.errors24h} errors in 24h</span>
                         </div>
-                        <LineChart 
+                        <TimeBarChart 
                             data={requestsData} 
                             color="#ef4444" 
                             height={250} 
-                            showArea 
                             valueFormatter={(v) => `${v.toFixed(2)}%`}
                         />
                     </div>
@@ -1358,13 +1539,13 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                             <div className="mb-4 flex items-center justify-between">
                                 <h3 className="font-semibold text-white">CPU Usage</h3>
                                 <div className="flex items-center gap-2">
-                                    <Cpu size={16} className="text-blue-500" />
+                                    <Cpu size={16} className="text-amber-500" />
                                     <span className="text-sm text-zinc-400">{latestCPU > 0 ? `${latestCPU.toFixed(1)}%` : 'N/A'}</span>
                                 </div>
                             </div>
                             <LineChart 
                                 data={cpuData} 
-                                color="#3b82f6" 
+                                color="#f59e0b" 
                                 height={200} 
                                 showArea 
                                 valueFormatter={(v) => `${v.toFixed(1)}%`}
@@ -1375,13 +1556,13 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                             <div className="mb-4 flex items-center justify-between">
                                 <h3 className="font-semibold text-white">Memory Usage</h3>
                                 <div className="flex items-center gap-2">
-                                    <Database size={16} className="text-purple-500" />
+                                    <Database size={16} className="text-amber-400" />
                                     <span className="text-sm text-zinc-400">{latestMemory > 0 ? formatBytes(latestMemory) : 'N/A'}</span>
                                 </div>
                             </div>
                             <LineChart 
                                 data={memoryData} 
-                                color="#a855f7" 
+                                color="#fbbf24" 
                                 height={200} 
                                 showArea 
                                 valueFormatter={(v) => formatBytes(v)}
