@@ -89,6 +89,7 @@ export interface AIAgentActions {
     initializeSettings: (settings: Partial<AISettings>) => void
     saveSettings: (settings: AISettings) => Promise<void>
     loadSettings: () => Promise<void>
+    loadConversations: () => Promise<void>
     setProjectId: (projectId: string) => void
     setAccessToken: (accessToken: string) => void
 }

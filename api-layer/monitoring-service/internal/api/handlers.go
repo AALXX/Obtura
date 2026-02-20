@@ -973,6 +973,7 @@ type ProjectMetricsResponse struct {
 	Endpoints           []metrics.EndpointStat      `json:"endpoints,omitempty"`
 	HeatmapData         []HeatmapPoint              `json:"heatmapData,omitempty"`
 	RequestsData        []metrics.RequestsDataPoint `json:"requestsData,omitempty"`
+	ErrorTypes          []ErrorTypeStat             `json:"errorTypes,omitempty"`
 }
 
 type DeploymentMetrics struct {
@@ -1044,28 +1045,44 @@ func (s *Server) handleGetProjectMetrics(c *gin.Context) {
 		httpMetrics, err := s.getHTTPMetrics(ctx, *prodDeployment, timeRange)
 		if err != nil {
 			logger.Error("Failed to get HTTP metrics", zap.String("deployment_id", *prodDeployment), logger.Err(err))
-			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "heatmapData", "requestsData")
+			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "heatmapData", "requestsData", "errorTypes")
 		} else {
 			response.LatencyDistribution = httpMetrics.LatencyDistribution
 			response.StatusCodes = httpMetrics.StatusCodes
 			response.Endpoints = httpMetrics.Endpoints
 			response.HeatmapData = httpMetrics.HeatmapData
 			response.RequestsData = httpMetrics.RequestsData
+			response.ErrorTypes = httpMetrics.ErrorTypes
 
 			if len(httpMetrics.LatencyDistribution) > 0 {
 				available = append(available, "latencyDistribution")
+			} else {
+				notAvailable = append(notAvailable, "latencyDistribution")
 			}
 			if len(httpMetrics.StatusCodes) > 0 {
 				available = append(available, "statusCodes")
+			} else {
+				notAvailable = append(notAvailable, "statusCodes")
 			}
 			if len(httpMetrics.Endpoints) > 0 {
 				available = append(available, "endpoints")
+			} else {
+				notAvailable = append(notAvailable, "endpoints")
 			}
 			if len(httpMetrics.HeatmapData) > 0 {
 				available = append(available, "heatmapData")
+			} else {
+				notAvailable = append(notAvailable, "heatmapData")
 			}
 			if len(httpMetrics.RequestsData) > 0 {
 				available = append(available, "requestsData")
+			} else {
+				notAvailable = append(notAvailable, "requestsData")
+			}
+			if len(httpMetrics.ErrorTypes) > 0 {
+				available = append(available, "errorTypes")
+			} else {
+				notAvailable = append(notAvailable, "errorTypes")
 			}
 		}
 	}
@@ -1318,6 +1335,13 @@ type HTTPMetricsData struct {
 	Endpoints           []metrics.EndpointStat
 	HeatmapData         []HeatmapPoint
 	RequestsData        []metrics.RequestsDataPoint
+	ErrorTypes          []ErrorTypeStat
+}
+
+type ErrorTypeStat struct {
+	Type     string `json:"type"`
+	Severity string `json:"severity"`
+	Count    int64  `json:"count"`
 }
 
 func (s *Server) getHTTPMetrics(ctx context.Context, deploymentID string, timeRange string) (*HTTPMetricsData, error) {
@@ -1379,18 +1403,18 @@ func (s *Server) getHTTPMetrics(ctx context.Context, deploymentID string, timeRa
 		}
 	}
 
-	// Get top endpoints - aggregate from http_metrics_minute
+	// Get top endpoints from sampled requests
 	endpointsQuery := `
 		SELECT 
-			'/' || SUBSTRING(deployment_id::text, 1, 8) as path_normalized,
-			'GET' as method,
-			SUM(request_count) as request_count,
-			AVG(latency_avg)::integer as latency_avg,
-			AVG(error_rate) * 100 as error_rate
-		FROM http_metrics_minute
+			COALESCE(path_normalized, path) as path,
+			method,
+			COUNT(*) as request_count,
+			AVG(latency_ms)::integer as latency_avg,
+			(COUNT(CASE WHEN status_code >= 400 THEN 1 END)::float / COUNT(*) * 100) as error_rate
+		FROM http_requests_sampled
 		WHERE deployment_id = $1 
-		  AND timestamp_minute >= NOW() - $2::interval
-		GROUP BY deployment_id
+		  AND timestamp >= NOW() - $2::interval
+		GROUP BY COALESCE(path_normalized, path), method
 		ORDER BY request_count DESC
 		LIMIT 10
 	`
@@ -1453,6 +1477,39 @@ func (s *Server) getHTTPMetrics(ctx context.Context, deploymentID string, timeRa
 				d.Time = int64(timeMs)
 				d.ErrorRate = errorRate * 100
 				data.RequestsData = append(data.RequestsData, d)
+			}
+		}
+	}
+
+	// Get error types (4xx and 5xx aggregated) using the stored counts
+	errorTypesQuery := `
+		SELECT 
+			CASE 
+				WHEN SUM(request_count_5xx) > 0 AND SUM(request_count_4xx) > 0 THEN 'Mixed Errors'
+				WHEN SUM(request_count_5xx) > 0 THEN '5xx Server Error'
+				ELSE '4xx Client Error'
+			END as error_type,
+			CASE 
+				WHEN SUM(request_count_5xx) > 0 THEN 'high'
+				ELSE 'low'
+			END as severity,
+			SUM(request_count_4xx + request_count_5xx) as count
+		FROM http_metrics_minute
+		WHERE deployment_id = $1 
+		  AND timestamp_minute >= NOW() - $2::interval
+		  AND (request_count_4xx > 0 OR request_count_5xx > 0)
+		GROUP BY deployment_id
+		ORDER BY count DESC
+	`
+	errorTypesRows, err := s.orchestrator.GetDB().QueryContext(ctx, errorTypesQuery, deploymentID, interval)
+	if err == nil {
+		defer errorTypesRows.Close()
+		for errorTypesRows.Next() {
+			var et ErrorTypeStat
+			if err := errorTypesRows.Scan(&et.Type, &et.Severity, &et.Count); err == nil {
+				if et.Count > 0 {
+					data.ErrorTypes = append(data.ErrorTypes, et)
+				}
 			}
 		}
 	}
@@ -1614,28 +1671,44 @@ func (s *Server) sendProjectMetricsEvent(c *gin.Context, flusher http.Flusher, p
 		httpMetrics, err := s.getHTTPMetrics(ctx, *prodID, timeRange)
 		if err != nil {
 			logger.Error("Failed to get SSE HTTP metrics", zap.String("deployment_id", *prodID), logger.Err(err))
-			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "heatmapData", "requestsData")
+			notAvailable = append(notAvailable, "latencyDistribution", "statusCodes", "endpoints", "heatmapData", "requestsData", "errorTypes")
 		} else {
 			response.LatencyDistribution = httpMetrics.LatencyDistribution
 			response.StatusCodes = httpMetrics.StatusCodes
 			response.Endpoints = httpMetrics.Endpoints
 			response.HeatmapData = httpMetrics.HeatmapData
 			response.RequestsData = httpMetrics.RequestsData
+			response.ErrorTypes = httpMetrics.ErrorTypes
 
 			if len(httpMetrics.LatencyDistribution) > 0 {
 				available = append(available, "latencyDistribution")
+			} else {
+				notAvailable = append(notAvailable, "latencyDistribution")
 			}
 			if len(httpMetrics.StatusCodes) > 0 {
 				available = append(available, "statusCodes")
+			} else {
+				notAvailable = append(notAvailable, "statusCodes")
 			}
 			if len(httpMetrics.Endpoints) > 0 {
 				available = append(available, "endpoints")
+			} else {
+				notAvailable = append(notAvailable, "endpoints")
 			}
 			if len(httpMetrics.HeatmapData) > 0 {
 				available = append(available, "heatmapData")
+			} else {
+				notAvailable = append(notAvailable, "heatmapData")
 			}
 			if len(httpMetrics.RequestsData) > 0 {
 				available = append(available, "requestsData")
+			} else {
+				notAvailable = append(notAvailable, "requestsData")
+			}
+			if len(httpMetrics.ErrorTypes) > 0 {
+				available = append(available, "errorTypes")
+			} else {
+				notAvailable = append(notAvailable, "errorTypes")
 			}
 		}
 	}

@@ -406,8 +406,8 @@ func (c *TraefikCollector) storeSampledRequests(ctx context.Context, entries []L
 	`
 
 	for _, e := range entries {
-		// Only store 1% of requests to avoid too much data
-		if time.Now().UnixNano()%100 != 0 {
+		// Sample 20% of requests for endpoint tracking (increased from 1% for better visibility)
+		if time.Now().UnixNano()%5 != 0 {
 			continue
 		}
 
@@ -417,12 +417,8 @@ func (c *TraefikCollector) storeSampledRequests(ctx context.Context, entries []L
 			clientIP = clientIP[:idx]
 		}
 
-		// Skip internal IPs
-		if strings.HasPrefix(clientIP, "172.20.") || strings.HasPrefix(clientIP, "172.21.") ||
-			strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") ||
-			strings.HasPrefix(clientIP, "127.") {
-			continue
-		}
+		// Allow all IPs (including internal) for development/testing
+		// In production, you might want to filter out internal IPs
 
 		// Simple path normalization
 		pathNormalized := e.Path

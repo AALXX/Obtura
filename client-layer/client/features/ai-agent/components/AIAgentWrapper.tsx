@@ -16,6 +16,7 @@ export function AIAgentWrapper({ projectId, accessToken }: AIAgentWrapperProps) 
     const hasLoadedRef = useRef(false)
 
     useEffect(() => {
+        console.log('🔄 AI Wrapper useEffect - projectId:', projectId, 'accessToken:', accessToken ? 'present' : 'missing')
         setProjectId(projectId)
         setAccessToken(accessToken)
         
@@ -27,9 +28,11 @@ export function AIAgentWrapper({ projectId, accessToken }: AIAgentWrapperProps) 
     }, [projectId, accessToken, setProjectId, setAccessToken, loadSettings])
 
     const handleOpen = () => {
+        console.log('🔔 Opening AI chat with projectId:', projectId)
         if (projectId) {
             openChat(projectId)
         } else {
+            console.warn('⚠️ No projectId available for AI chat')
             openChat()
         }
     }

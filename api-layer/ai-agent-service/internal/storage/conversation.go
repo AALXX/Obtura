@@ -25,7 +25,7 @@ type Conversation struct {
 	ID        string    `json:"id"`
 	ProjectID string    `json:"projectId"`
 	UserID    string    `json:"userId"`
-	SessionID string    `json:"sessionId"`
+	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -47,19 +47,19 @@ func NewConversationStore(db *sql.DB) *ConversationStore {
 }
 
 // CreateConversation creates a new conversation
-func (s *ConversationStore) CreateConversation(projectID, userID, sessionID string) (*Conversation, error) {
+func (s *ConversationStore) CreateConversation(projectID, userID, title string) (*Conversation, error) {
 	id := uuid.New().String()
 	now := time.Now()
 
 	query := `
-		INSERT INTO ai_conversations (id, project_id, user_id, session_id, created_at, updated_at)
+		INSERT INTO ai_conversations (id, project_id, user_id, title, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, project_id, user_id, session_id, created_at, updated_at
+		RETURNING id, project_id, user_id, title, created_at, updated_at
 	`
 
 	var conv Conversation
-	err := s.db.QueryRow(query, id, projectID, userID, sessionID, now, now).Scan(
-		&conv.ID, &conv.ProjectID, &conv.UserID, &conv.SessionID, &conv.CreatedAt, &conv.UpdatedAt,
+	err := s.db.QueryRow(query, id, projectID, userID, title, now, now).Scan(
+		&conv.ID, &conv.ProjectID, &conv.UserID, &conv.Title, &conv.CreatedAt, &conv.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create conversation: %w", err)
@@ -71,14 +71,14 @@ func (s *ConversationStore) CreateConversation(projectID, userID, sessionID stri
 // GetConversation retrieves a conversation by ID with its messages
 func (s *ConversationStore) GetConversation(conversationID string) (*ConversationWithMessages, error) {
 	query := `
-		SELECT id, project_id, user_id, session_id, created_at, updated_at
+		SELECT id, project_id, user_id, title, created_at, updated_at
 		FROM ai_conversations
 		WHERE id = $1
 	`
 
 	var conv ConversationWithMessages
 	err := s.db.QueryRow(query, conversationID).Scan(
-		&conv.ID, &conv.ProjectID, &conv.UserID, &conv.SessionID, &conv.CreatedAt, &conv.UpdatedAt,
+		&conv.ID, &conv.ProjectID, &conv.UserID, &conv.Title, &conv.CreatedAt, &conv.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -100,7 +100,7 @@ func (s *ConversationStore) GetConversation(conversationID string) (*Conversatio
 // GetConversationsByProject retrieves all conversations for a project
 func (s *ConversationStore) GetConversationsByProject(projectID string) ([]Conversation, error) {
 	query := `
-		SELECT id, project_id, user_id, session_id, created_at, updated_at
+		SELECT id, project_id, user_id, title, created_at, updated_at
 		FROM ai_conversations
 		WHERE project_id = $1
 		ORDER BY updated_at DESC
@@ -115,7 +115,7 @@ func (s *ConversationStore) GetConversationsByProject(projectID string) ([]Conve
 	var conversations []Conversation
 	for rows.Next() {
 		var conv Conversation
-		err := rows.Scan(&conv.ID, &conv.ProjectID, &conv.UserID, &conv.SessionID, &conv.CreatedAt, &conv.UpdatedAt)
+		err := rows.Scan(&conv.ID, &conv.ProjectID, &conv.UserID, &conv.Title, &conv.CreatedAt, &conv.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan conversation: %w", err)
 		}
@@ -135,6 +135,20 @@ func (s *ConversationStore) UpdateConversationTimestamp(conversationID string) e
 	_, err := s.db.Exec(query, time.Now(), conversationID)
 	if err != nil {
 		return fmt.Errorf("failed to update conversation: %w", err)
+	}
+	return nil
+}
+
+// UpdateConversationTitle updates the conversation's title
+func (s *ConversationStore) UpdateConversationTitle(conversationID, title string) error {
+	query := `
+		UPDATE ai_conversations
+		SET title = $1, updated_at = $2
+		WHERE id = $3
+	`
+	_, err := s.db.Exec(query, title, time.Now(), conversationID)
+	if err != nil {
+		return fmt.Errorf("failed to update conversation title: %w", err)
 	}
 	return nil
 }
@@ -161,23 +175,23 @@ func (s *ConversationStore) AddMessage(conversationID, role, content string, con
 	id := uuid.New().String()
 	now := time.Now()
 
-	var contextJSON []byte
-	var err error
+	contextStr := "{}"
 	if context != nil {
-		contextJSON, err = json.Marshal(context)
+		contextJSON, err := json.Marshal(context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal context: %w", err)
 		}
+		contextStr = string(contextJSON)
 	}
 
 	query := `
 		INSERT INTO ai_messages (id, conversation_id, role, content, context, tokens_used, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 		RETURNING id, conversation_id, role, content, context, tokens_used, created_at
 	`
 
 	var msg Message
-	err = s.db.QueryRow(query, id, conversationID, role, content, contextJSON, tokensUsed, now).Scan(
+	err := s.db.QueryRow(query, id, conversationID, role, content, contextStr, tokensUsed, now).Scan(
 		&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Context, &msg.TokensUsed, &msg.CreatedAt,
 	)
 	if err != nil {

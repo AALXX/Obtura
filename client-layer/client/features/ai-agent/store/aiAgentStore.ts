@@ -55,9 +55,14 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
     
     openChat: (projectId?: string) => {
         const state = get()
-        if (projectId && state.projectId !== projectId) {
-            set({ projectId })
+        // Always ensure we have a valid projectId
+        const effectiveProjectId = projectId || state.projectId
+        
+        // Update store with projectId if we have one
+        if (effectiveProjectId) {
+            set({ projectId: effectiveProjectId })
             get().loadSettings()
+            get().loadConversations()
         }
         set({ isOpen: true })
     },
@@ -75,7 +80,22 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
     },
 
     sendMessage: async (content: string) => {
-        const { projectId, conversations, activeConversationId } = get()
+        // Get fresh state at the exact moment of sending
+        const projectId = get().projectId
+        const accessToken = get().accessToken
+        
+        if (!projectId || projectId.trim() === '') {
+            console.error('Cannot send message: projectId is missing or empty')
+            return
+        }
+        
+        if (!accessToken) {
+            console.error('Cannot send message: accessToken is missing')
+            return
+        }
+        
+        const conversations = get().conversations
+        const activeConversationId = get().activeConversationId
         
         const userMessage: Message = {
             id: generateId(),
@@ -107,23 +127,31 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
 
         try {
             const activeId = get().activeConversationId || get().conversations[0]?.id
+            const conversation = get().conversations.find(c => c.id === activeId)
+            
+            // Only send conversationId if it looks like a valid UUID (not a local random ID)
+            // Local IDs are short random strings, real UUIDs are 36 chars
+            const sendConversationId = activeId && activeId.length === 36 ? activeId : undefined
+            
+            console.log('📤 Sending message - projectId:', projectId, 'conversationId:', sendConversationId)
             
             const response = await axios.post(
                 `${AI_AGENT_URL}/api/ai/chat`,
                 {
                     message: content,
                     projectId: projectId,
-                    conversationId: activeId,
+                    conversationId: sendConversationId,
                 },
                 {
                     headers: {
                         'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${accessToken}`,
                     },
                     timeout: 60000,
                 }
             )
 
-            const respData = response.data as { content?: string; message?: string }
+            const respData = response.data as { content?: string; message?: string; conversationId?: string; title?: string }
             const assistantMessage: Message = {
                 id: generateId(),
                 role: 'assistant',
@@ -137,12 +165,14 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                 if (!conversation) return state
 
                 const messages = [...conversation.messages, assistantMessage]
-                const title = conversation.title === 'New Conversation' && messages.length === 3
+                // Use title from backend if available, otherwise generate from first message
+                const title = respData.title || (conversation.title === 'New Conversation' && messages.length === 3
                     ? content.slice(0, 30) + (content.length > 30 ? '...' : '')
-                    : conversation.title
+                    : conversation.title)
 
                 const updatedConversation = {
                     ...conversation,
+                    id: respData.conversationId || conversation.id,
                     title,
                     messages,
                     updatedAt: new Date()
@@ -152,6 +182,7 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     conversations: state.conversations.map(c =>
                         c.id === activeId ? updatedConversation : c
                     ),
+                    activeConversationId: respData.conversationId || activeConversationId,
                     isLoading: false
                 }
             })
@@ -368,6 +399,91 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
             }
         } catch (error) {
             console.error('Failed to load AI settings from backend:', error)
+        }
+    },
+
+    loadConversations: async () => {
+        const { projectId } = get()
+        
+        if (!projectId) {
+            console.log('Cannot load conversations: missing projectId')
+            return
+        }
+
+        try {
+            const response = await axios.get<{ conversations: Array<{
+                id: string
+                projectId: string
+                userId: string
+                title: string
+                createdAt: string
+                updatedAt: string
+            }> }>(
+                `${AI_AGENT_URL}/api/conversations?projectId=${projectId}`,
+                { timeout: 5000 }
+            )
+            
+            const conversations = response.data?.conversations || []
+            console.log('📥 Loaded conversations:', conversations)
+            
+            if (conversations.length > 0) {
+                // Load messages for each conversation
+                const conversationsWithMessages = await Promise.all(
+                    conversations.map(async (conv) => {
+                        try {
+                            const msgResponse = await axios.get<{
+                                id: string
+                                projectId: string
+                                userId: string
+                                title: string
+                                createdAt: string
+                                updatedAt: string
+                                messages: Array<{
+                                    id: string
+                                    conversationId: string
+                                    role: string
+                                    content: string
+                                    createdAt: string
+                                }>
+                            }>(
+                                `${AI_AGENT_URL}/api/conversations/${conv.id}`,
+                                { timeout: 5000 }
+                            )
+                            return {
+                                id: conv.id,
+                                title: conv.title || 'New Conversation',
+                                messages: msgResponse.data.messages?.map((m: any) => ({
+                                    id: m.id,
+                                    role: m.role as 'user' | 'assistant',
+                                    content: m.content,
+                                    timestamp: new Date(m.createdAt)
+                                })) || [],
+                                createdAt: new Date(conv.createdAt),
+                                updatedAt: new Date(conv.updatedAt)
+                            }
+                        } catch (e) {
+                            console.error('Failed to load messages for conversation:', conv.id, e)
+                            return {
+                                id: conv.id,
+                                title: conv.title || 'New Conversation',
+                                messages: [],
+                                createdAt: new Date(conv.createdAt),
+                                updatedAt: new Date(conv.updatedAt)
+                            }
+                        }
+                    })
+                )
+
+                set(state => ({
+                    conversations: conversationsWithMessages,
+                    activeConversationId: conversationsWithMessages[0]?.id || state.activeConversationId
+                }))
+            } else {
+                // No conversations in DB, keep local ones but they won't have real IDs
+                console.log('No conversations found in DB, using local')
+            }
+        } catch (error) {
+            console.error('Failed to load conversations:', error)
         }
     },
 }))

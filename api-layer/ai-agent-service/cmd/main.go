@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -68,6 +69,19 @@ func validateAndInferModel(provider, model string) string {
 		return getDefaultModel(provider)
 	}
 	return model
+}
+
+func getUserIdFromSessionToken(db *sql.DB, ctx context.Context, sessionToken string) (string, error) {
+	query := `SELECT user_id FROM sessions WHERE access_token = $1`
+	var userID string
+	err := db.QueryRowContext(ctx, query, sessionToken).Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("invalid session token")
+		}
+		return "", err
+	}
+	return userID, nil
 }
 
 func main() {
@@ -212,6 +226,7 @@ func main() {
 			Message        string `json:"message"`
 			ProjectID      string `json:"projectId"`
 			ConversationID string `json:"conversationId"`
+			Title          string `json:"title"`
 		}
 
 		if err := c.BindJSON(&req); err != nil {
@@ -229,10 +244,72 @@ func main() {
 			return
 		}
 
+		// Get user ID from access token
+		authHeader := c.GetHeader("Authorization")
+		var userID string
+		if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			var err error
+			userID, err = getUserIdFromSessionToken(db.DB, c.Request.Context(), token)
+			if err != nil {
+				log.Printf("⚠️ Failed to get user from token: %v", err)
+				c.JSON(401, gin.H{"error": "Invalid or expired session"})
+				return
+			}
+		}
+		if userID == "" {
+			c.JSON(401, gin.H{"error": "Authorization required"})
+			return
+		}
+
+		// Always use "New Conversation" for new conversations - title will be updated after first AI response
+		title := "New Conversation"
+
+		// Get or create conversation
+		var conv *storage.Conversation
+		isNewConversation := false
+		log.Printf("DEBUG: Received conversationId: '%s'", req.ConversationID)
+		if req.ConversationID != "" {
+			convWithMsg, err := conversationStore.GetConversation(req.ConversationID)
+			if err == nil && convWithMsg != nil {
+				conv = &convWithMsg.Conversation
+				log.Printf("DEBUG: Found existing conversation: %s with title: %s", conv.ID, conv.Title)
+			} else {
+				log.Printf("DEBUG: Conversation not found: %v", err)
+			}
+		}
+		if conv == nil {
+			isNewConversation = true
+			log.Printf("📝 Creating new conversation with title: %s", title)
+			newConv, err := conversationStore.CreateConversation(req.ProjectID, userID, title)
+			if err != nil {
+				log.Printf("❌ Failed to create conversation: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to create conversation"})
+				return
+			} else {
+				conv = newConv
+				log.Printf("✅ Created conversation: %s with title: %s", conv.ID, conv.Title)
+			}
+		}
+		if conv == nil {
+			c.JSON(500, gin.H{"error": "Failed to create or find conversation"})
+			return
+		}
+
+		// Save user message
+		_, err = conversationStore.AddMessage(conv.ID, "user", req.Message, nil, nil)
+		if err != nil {
+			log.Printf("❌ Failed to save user message: %v", err)
+			c.JSON(500, gin.H{"error": "Failed to save message"})
+			return
+		}
+
 		config, apiKey, err := providerStore.GetActiveProviderForProject(req.ProjectID)
 		if err != nil {
+			conversationStore.AddMessage(conv.ID, "assistant", "⚠️ No AI provider configured for this project.\n\nPlease add an API key in the AI Settings (gear icon) to enable AI assistance.", nil, nil)
 			c.JSON(200, gin.H{
-				"content": "⚠️ No AI provider configured for this project.\n\nPlease add an API key in the AI Settings (gear icon) to enable AI assistance.",
+				"content":        "⚠️ No AI provider configured for this project.\n\nPlease add an API key in the AI Settings (gear icon) to enable AI assistance.",
+				"conversationId": conv.ID,
 			})
 			return
 		}
@@ -240,18 +317,38 @@ func main() {
 		providerType := llm.ProviderType(config.Provider)
 		provider := llm.NewProviderFromConfig(providerType, apiKey, config.Model)
 		if !provider.IsAvailable() {
+			conversationStore.AddMessage(conv.ID, "assistant", "⚠️ AI provider is not available.\n\nPlease check your API key in AI Settings.", nil, nil)
 			c.JSON(200, gin.H{
-				"content": "⚠️ AI provider is not available.\n\nPlease check your API key in AI Settings.",
+				"content":        "⚠️ AI provider is not available.\n\nPlease check your API key in AI Settings.",
+				"conversationId": conv.ID,
 			})
 			return
 		}
 
 		log.Printf("🤖 Using provider: %s, model: %s for project: %s", config.Provider, config.Model, req.ProjectID)
 
+		log.Printf("DEBUG: Getting conversation history...")
+		// Get conversation history for context
+		history, err := conversationStore.GetMessages(conv.ID)
+		if err != nil {
+			log.Printf("⚠️ Failed to get conversation history: %v", err)
+		}
+
 		messages := []llm.Message{
 			{Role: "system", Content: aiAgent.GetSystemPrompt()},
-			{Role: "user", Content: req.Message},
 		}
+		// Add history (last 10 messages to keep context manageable)
+		if len(history) > 0 {
+			startIdx := 0
+			if len(history) > 10 {
+				startIdx = len(history) - 10
+			}
+			for _, msg := range history[startIdx:] {
+				messages = append(messages, llm.Message{Role: msg.Role, Content: msg.Content})
+			}
+		}
+		// Add current message
+		messages = append(messages, llm.Message{Role: "user", Content: req.Message})
 
 		completeReq := llm.CompletionRequest{
 			Messages:    messages,
@@ -261,29 +358,54 @@ func main() {
 		}
 
 		resp, err := provider.Complete(c.Request.Context(), completeReq)
+		log.Printf("DEBUG: AI call completed, err=%v", err)
+
+		// Update title for new conversations (whether AI succeeds or fails)
+		if isNewConversation {
+			newTitle := req.Message
+			if len(newTitle) > 30 {
+				newTitle = newTitle[:30] + "..."
+			}
+			log.Printf("DEBUG: Updating title to: %s", newTitle)
+			updateErr := conversationStore.UpdateConversationTitle(conv.ID, newTitle)
+			if updateErr != nil {
+				log.Printf("❌ Failed to update title: %v", updateErr)
+			}
+			conv.Title = newTitle
+		}
+
 		if err != nil {
 			log.Printf("❌ LLM completion error: %v", err)
 			errMsg := err.Error()
+			var errorMsg string
 			if strings.Contains(errMsg, "credit balance is too low") {
-				c.JSON(200, gin.H{
-					"content": "⚠️ Your Anthropic API credit balance is too low.\n\nPlease add credits to your Anthropic account at https://console.anthropic.com/settings/billing",
-				})
-				return
+				errorMsg = "⚠️ Your Anthropic API credit balance is too low.\n\nPlease add credits to your Anthropic account at https://console.anthropic.com/settings/billing"
+			} else if strings.Contains(errMsg, "invalid_api_key") || strings.Contains(errMsg, "Unauthorized") {
+				errorMsg = "⚠️ Your API key appears to be invalid.\n\nPlease update your API key in AI Settings."
+			} else {
+				errorMsg = fmt.Sprintf("⚠️ AI request failed: %s", errMsg)
 			}
-			if strings.Contains(errMsg, "invalid_api_key") || strings.Contains(errMsg, "Unauthorized") {
-				c.JSON(200, gin.H{
-					"content": "⚠️ Your API key appears to be invalid.\n\nPlease update your API key in AI Settings.",
-				})
-				return
+			_, msgErr := conversationStore.AddMessage(conv.ID, "assistant", errorMsg, nil, nil)
+			if msgErr != nil {
+				log.Printf("❌ Failed to save error message: %v", msgErr)
 			}
 			c.JSON(200, gin.H{
-				"content": fmt.Sprintf("⚠️ AI request failed: %s", errMsg),
+				"content":        errorMsg,
+				"conversationId": conv.ID,
 			})
 			return
 		}
 
+		// Save assistant response
+		_, msgErr := conversationStore.AddMessage(conv.ID, "assistant", resp.Content, nil, nil)
+		if msgErr != nil {
+			log.Printf("❌ Failed to save assistant message: %v", msgErr)
+		}
+
 		c.JSON(200, gin.H{
-			"content": resp.Content,
+			"content":        resp.Content,
+			"conversationId": conv.ID,
+			"title":          conv.Title,
 		})
 	})
 

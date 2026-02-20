@@ -1109,6 +1109,13 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
         return (metricData?.requestsData || []).map(point => ({ time: point.time, value: point.avgLatency || 0 }))
     }, [metricData?.notAvailable, metricData?.requestsData])
 
+    const errorRateData = useMemo(() => {
+        if (metricData?.notAvailable?.includes('requestsData')) {
+            return []
+        }
+        return (metricData?.requestsData || []).map(point => ({ time: point.time, value: point.errorRate || 0 }))
+    }, [metricData?.notAvailable, metricData?.requestsData])
+
     const latencyData = useMemo(() => {
         if (metricData?.notAvailable?.includes('latencyDistribution')) {
             return []
@@ -1478,7 +1485,7 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                             <span className="text-sm text-zinc-400">{projectData.metrics.errors24h} errors in 24h</span>
                         </div>
                         <TimeBarChart 
-                            data={requestsData} 
+                            data={errorRateData}
                             color="#ef4444" 
                             height={250} 
                             valueFormatter={(v) => `${v.toFixed(2)}%`}

@@ -67,11 +67,10 @@ CREATE TABLE ai_token_usage_log (
 );
 
 -- Conversations and chat history
-CREATE TABLE ai_conversations (
+CREATE TABLE IF NOT EXISTS ai_conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID NOT NULL REFERENCES projects(id),
     user_id UUID NOT NULL REFERENCES users(id),
-    session_id VARCHAR(100) NOT NULL,
     title VARCHAR(255),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
