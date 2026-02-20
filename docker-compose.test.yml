@@ -119,6 +119,7 @@ services:
       - NEXT_PUBLIC_DEPLOY_SERVICE_URL=https://${DOMAIN}/deploy-service/api
       - NEXT_PUBLIC_PAYMENT_SERVICE_URL=https://${DOMAIN}/payment-service
       - NEXT_PUBLIC_MONITORING_SERVICE_URL=https://${DOMAIN}/monitoring-service
+      - NEXT_PUBLIC_AI_AGENT_SERVICE_URL=https://${DOMAIN}/ai-agent-service
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - NEXTAUTH_URL=https://${DOMAIN}
@@ -441,6 +442,68 @@ services:
       - obtura_test
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5110/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  ai-agent-service:
+    build:
+      context: ./api-layer/ai-agent-service
+      dockerfile: Dockerfile.dev
+    container_name: obtura-ai-agent-service
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ai-agent-service.rule=Host(`${DOMAIN}`) && PathPrefix(`/ai-agent-service`)"
+      - "traefik.http.routers.ai-agent-service.entrypoints=websecure"
+      - "traefik.http.routers.ai-agent-service.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.ai-agent-service.priority=20"
+      - "traefik.http.middlewares.strip-ai-agent-service.stripprefix.prefixes=/ai-agent-service"
+      - "traefik.http.routers.ai-agent-service.middlewares=strip-ai-agent-service"
+      - "traefik.http.services.ai-agent-service.loadbalancer.server.port=5120"
+      - "traefik.docker.network=obtura_test"
+      - "traefik.http.services.ai-agent-service.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.ai-agent-service.loadbalancer.healthcheck.interval=10s"
+    volumes:
+      - docker-certs:/certs/client:ro
+    environment:
+      - GO_ENV=production
+      - PORT=5120
+      - ENV_ENCRYPTION_KEY=${ENV_ENCRYPTION_KEY}
+      - CORE_API_URL=http://core-api:7070
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_DATABASE=obtura_db
+      - POSTGRESQL_USER=${POSTGRES_USER}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_BUCKET=obtura-builds
+      - MINIO_USE_SSL=false
+      - BUILD_SERVICE_URL=http://build-service:5050
+      - MONITORING_SERVICE_URL=http://monitoring-service:5110
+      - DEPLOY_SERVICE_URL=http://deploy-service:5070
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - FALLBACK_API_KEY=${FALLBACK_API_KEY}
+      - DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-mock}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+      core-api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - obtura_test
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5120/health"]
       interval: 30s
       timeout: 10s
       retries: 3

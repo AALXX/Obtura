@@ -17,6 +17,7 @@ import DeploymentSettings from './components/DeploymentSettings'
 import MonitoringDashboard from './components/MonitoringDashboard'
 import { useDeploymentUpdates } from '@/hooks/useDeployuseDeploymentUpdates'
 import CreateServiceDialog from './components/CreateServiceDialog'
+import { AIAgentWrapper } from '@/features/ai-agent/components/AIAgentWrapper'
 
 const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; services: { service_name: string; env_vars: Record<string, string> }[] }> = ({ projectData, accessToken, services }) => {
     const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'deploymentHistory' | 'environment' | 'settings' | 'monitoring' | 'builds'>('overview')
@@ -104,33 +105,41 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         const stagingDeployment = liveDeployments.find(d => d.environment === 'staging')
 
         if (productionDeployment) {
-            setProductionEnv(prev => prev ? {
-                ...prev,
-                status: productionDeployment.status,
-                deploymentStrategy: productionDeployment.deploymentStrategy,
-                branch: productionDeployment.branch,
-                commitHash: productionDeployment.commitHash,
-                containers: productionDeployment.containers || [],
-                totalContainers: productionDeployment.containers?.length || 0,
-                healthyContainers: productionDeployment.containers?.filter(c => c.healthStatus === 'healthy').length || 0,
-                unresolvedAlerts: productionDeployment.unresolvedAlerts || [],
-                unresolvedAlertCount: productionDeployment.unresolvedAlertCount || 0
-            } : null)
+            setProductionEnv(prev =>
+                prev
+                    ? {
+                          ...prev,
+                          status: productionDeployment.status,
+                          deploymentStrategy: productionDeployment.deploymentStrategy,
+                          branch: productionDeployment.branch,
+                          commitHash: productionDeployment.commitHash,
+                          containers: productionDeployment.containers || [],
+                          totalContainers: productionDeployment.containers?.length || 0,
+                          healthyContainers: productionDeployment.containers?.filter(c => c.healthStatus === 'healthy').length || 0,
+                          unresolvedAlerts: productionDeployment.unresolvedAlerts || [],
+                          unresolvedAlertCount: productionDeployment.unresolvedAlertCount || 0
+                      }
+                    : null
+            )
         }
 
         if (stagingDeployment) {
-            setStagingEnv(prev => prev ? {
-                ...prev,
-                status: stagingDeployment.status,
-                deploymentStrategy: stagingDeployment.deploymentStrategy,
-                branch: stagingDeployment.branch,
-                commitHash: stagingDeployment.commitHash,
-                containers: stagingDeployment.containers || [],
-                totalContainers: stagingDeployment.containers?.length || 0,
-                healthyContainers: stagingDeployment.containers?.filter(c => c.healthStatus === 'healthy').length || 0,
-                unresolvedAlerts: stagingDeployment.unresolvedAlerts || [],
-                unresolvedAlertCount: stagingDeployment.unresolvedAlertCount || 0
-            } : null)
+            setStagingEnv(prev =>
+                prev
+                    ? {
+                          ...prev,
+                          status: stagingDeployment.status,
+                          deploymentStrategy: stagingDeployment.deploymentStrategy,
+                          branch: stagingDeployment.branch,
+                          commitHash: stagingDeployment.commitHash,
+                          containers: stagingDeployment.containers || [],
+                          totalContainers: stagingDeployment.containers?.length || 0,
+                          healthyContainers: stagingDeployment.containers?.filter(c => c.healthStatus === 'healthy').length || 0,
+                          unresolvedAlerts: stagingDeployment.unresolvedAlerts || [],
+                          unresolvedAlertCount: stagingDeployment.unresolvedAlertCount || 0
+                      }
+                    : null
+            )
         }
     }, [liveDeployments])
 
@@ -140,12 +149,12 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 console.log('Fetching updated deployment data...')
                 const resp = await axios.get<{ error: boolean; project: any }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/get-project-details/${projectData.id}/${accessToken}`)
                 console.log('API Response:', resp.data)
-                
+
                 if (resp.data?.error === false && resp.data?.project) {
                     const updatedProject = resp.data.project
                     console.log('Updated project production:', updatedProject.production)
                     console.log('Updated project staging:', updatedProject.staging)
-                    
+
                     if (updatedProject.production) {
                         setProductionEnv(prev => {
                             console.log('Merging production:', prev, 'with', updatedProject.production)
@@ -458,17 +467,9 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
         setShowBuildConfigDialog(true)
     }
 
-    const handleConfiguredBuild = async (config: {
-        branch: string
-        commit: string
-        buildCommand?: string
-        installCommand?: string
-        rootDirectory?: string
-        nodeVersion?: string
-        enableCache?: boolean
-    }) => {
+    const handleConfiguredBuild = async (config: { branch: string; commit: string; buildCommand?: string; installCommand?: string; rootDirectory?: string; nodeVersion?: string; enableCache?: boolean }) => {
         setShowBuildConfigDialog(false)
-        
+
         try {
             const resp = await axios.post<{ buildId: string; commitHash: string; branch: string; status: string }>(`${process.env.NEXT_PUBLIC_BACKEND_URL}/projects-manager/trigger-build`, {
                 projectId: projectData.id,
@@ -671,10 +672,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                 )}
                             </button>
 
-                            <button
-                                onClick={() => setShowCreateServiceDialog(true)}
-                                className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
-                            >
+                            <button onClick={() => setShowCreateServiceDialog(true)} className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800">
                                 <Layers size={18} />
                                 Create Service
                             </button>
@@ -700,14 +698,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
             {showBuildConfigDialog && (
                 <DialogCanvas closeDialog={() => setShowBuildConfigDialog(false)}>
-                    <BuildConfigDialog
-                        accessToken={accessToken}
-                        projectId={projectData.id}
-                        gitRepoUrl={projectData.gitRepoUrl}
-                        currentBranch={projectData.production?.branch || 'main'}
-                        onBuild={handleConfiguredBuild}
-                        onClose={() => setShowBuildConfigDialog(false)}
-                    />
+                    <BuildConfigDialog accessToken={accessToken} projectId={projectData.id} gitRepoUrl={projectData.gitRepoUrl} currentBranch={projectData.production?.branch || 'main'} onBuild={handleConfiguredBuild} onClose={() => setShowBuildConfigDialog(false)} />
                 </DialogCanvas>
             )}
 
@@ -735,7 +726,16 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
             {showDeployDialog && (
                 <DialogCanvas closeDialog={() => setShowDeployDialog(false)}>
-                    <DeployDialog accessToken={accessToken} projectId={projectData.id} gitRepoUrl={projectData.gitRepoUrl} builds={liveBuilds} currentBranch={productionEnv?.branch || stagingEnv?.branch || 'main'} deploymentStrategy={productionEnv?.deploymentStrategy || 'blue_green'} onDeploy={handleDeploy} onClose={() => setShowDeployDialog(false)} />
+                    <DeployDialog
+                        accessToken={accessToken}
+                        projectId={projectData.id}
+                        gitRepoUrl={projectData.gitRepoUrl}
+                        builds={liveBuilds}
+                        currentBranch={productionEnv?.branch || stagingEnv?.branch || 'main'}
+                        deploymentStrategy={productionEnv?.deploymentStrategy || 'blue_green'}
+                        onDeploy={handleDeploy}
+                        onClose={() => setShowDeployDialog(false)}
+                    />
                 </DialogCanvas>
             )}
 
@@ -745,7 +745,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                         projectId={projectData.id}
                         accessToken={accessToken}
                         onClose={() => setShowCreateServiceDialog(false)}
-                        onServiceCreated={(service) => {
+                        onServiceCreated={service => {
                             console.log('Service created:', service)
                             // Refresh services list or show success notification
                         }}
@@ -754,7 +754,12 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             )}
 
             {showDeleteConfirm && (
-                <DialogCanvas closeDialog={() => { setShowDeleteConfirm(false); setDeploymentToDelete(null) }}>
+                <DialogCanvas
+                    closeDialog={() => {
+                        setShowDeleteConfirm(false)
+                        setDeploymentToDelete(null)
+                    }}
+                >
                     <div className="w-full max-w-md p-6">
                         <div className="mb-4 flex items-center gap-3">
                             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10">
@@ -762,21 +767,18 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                             </div>
                             <h3 className="text-xl font-semibold">Delete Deployment</h3>
                         </div>
-                        <p className="mb-6 text-zinc-400">
-                            Are you sure you want to delete this deployment? This will stop and remove all running containers. This action cannot be undone.
-                        </p>
+                        <p className="mb-6 text-zinc-400">Are you sure you want to delete this deployment? This will stop and remove all running containers. This action cannot be undone.</p>
                         <div className="flex gap-3">
                             <button
-                                onClick={() => { setShowDeleteConfirm(false); setDeploymentToDelete(null) }}
+                                onClick={() => {
+                                    setShowDeleteConfirm(false)
+                                    setDeploymentToDelete(null)
+                                }}
                                 className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700"
                             >
                                 Cancel
                             </button>
-                            <button
-                                onClick={confirmDeleteDeployment}
-                                disabled={isDeletingDeployment}
-                                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
-                            >
+                            <button onClick={confirmDeleteDeployment} disabled={isDeletingDeployment} className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50">
                                 {isDeletingDeployment ? (
                                     <>
                                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
@@ -795,12 +797,8 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             )}
 
             {deleteNotification.show && (
-                <div className={`fixed right-4 top-4 z-50 flex items-center gap-3 rounded-lg px-4 py-3 shadow-lg ${deleteNotification.success ? 'bg-green-500/90' : 'bg-red-500/90'}`}>
-                    {deleteNotification.success ? (
-                        <CheckCircle2 size={20} className="text-white" />
-                    ) : (
-                        <XCircle size={20} className="text-white" />
-                    )}
+                <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 rounded-lg px-4 py-3 shadow-lg ${deleteNotification.success ? 'bg-green-500/90' : 'bg-red-500/90'}`}>
+                    {deleteNotification.success ? <CheckCircle2 size={20} className="text-white" /> : <XCircle size={20} className="text-white" />}
                     <span className="text-sm font-medium text-white">{deleteNotification.message}</span>
                 </div>
             )}
@@ -1237,10 +1235,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                             >
                                                                 <Eye size={16} />
                                                             </button>
-                                                            <button
-                                                                onClick={() => handleDeleteDeployment(deployment.id)}
-                                                                className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40"
-                                                            >
+                                                            <button onClick={() => handleDeleteDeployment(deployment.id)} className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40">
                                                                 <Trash2 size={16} />
                                                             </button>
                                                         </div>
@@ -1777,6 +1772,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                     </div>
                 )}
             </div>
+            <AIAgentWrapper projectId={projectData.id} accessToken={accessToken} />
         </div>
     )
 }
