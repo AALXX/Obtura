@@ -525,6 +525,10 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		serviceDir := filepath.Join(workDir, framework.Path)
 		dockerfilePath := filepath.Join(serviceDir, "Dockerfile")
 
+		if err := builder.EnsureNginxConfig(framework, serviceDir); err != nil {
+			log.Printf("⚠️ Failed to generate nginx config for %s: %v", framework.Name, err)
+		}
+
 		if !pkg.FileExists(dockerfilePath) {
 			w.streamLog(job.BuildID, fmt.Sprintf("Generating Dockerfile for %s...", framework.Name))
 
@@ -553,10 +557,6 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 			w.streamLog(job.BuildID, fmt.Sprintf("✅ Generated Dockerfile for %s in %s/", framework.Name, framework.Path))
 		} else {
 			w.streamLog(job.BuildID, fmt.Sprintf("Using existing Dockerfile for %s in %s/", framework.Name, framework.Path))
-		}
-
-		if err := builder.EnsureNginxConfig(framework, serviceDir); err != nil {
-			log.Printf("⚠️ Failed to generate nginx config for %s: %v", framework.Name, err)
 		}
 	}
 

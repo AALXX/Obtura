@@ -196,12 +196,23 @@ func (w *Worker) Start() error {
 			if err := w.handleDeploymentMessage(msg); err != nil {
 				log.Printf("❌ Error processing deployment: %v", err)
 
+				// Parse message to get deployment ID
+				var deployMsg DeployMessage
+				if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
+					// Check if deployment is already in a terminal state - don't retry if so
+					status := w.getDeploymentStatus(deployMsg.DeploymentID)
+					if status == "failed" || status == "active" || status == "cancelled" {
+						log.Printf("⏭️ Deployment %s already in terminal state (%s), not retrying", deployMsg.DeploymentID, status)
+						msg.Ack(false)
+						continue
+					}
+				}
+
 				// Get retry count from both message headers and database
 				retryCount := w.getRetryCount(msg)
 
 				// Also check database retry count
-				var deployMsg DeployMessage
-				if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
+				if deployMsg.DeploymentID != "" {
 					dbRetryCount := w.getDeploymentRetryCount(deployMsg.DeploymentID)
 					if dbRetryCount > retryCount {
 						retryCount = dbRetryCount
@@ -212,7 +223,7 @@ func (w *Worker) Start() error {
 					log.Printf("❌ Max retries (%d) reached for deployment, marking as permanently failed", MaxDeploymentRetries)
 
 					// Extract deployment ID and mark as failed
-					if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
+					if deployMsg.DeploymentID != "" {
 						w.markDeploymentAsPermanentlyFailed(deployMsg.DeploymentID, fmt.Sprintf("Failed after %d retry attempts. Last error: %v", MaxDeploymentRetries, err))
 					}
 
@@ -222,7 +233,7 @@ func (w *Worker) Start() error {
 					log.Printf("⚠️ Deployment failed, will retry (attempt %d/%d)", retryCount+1, MaxDeploymentRetries)
 
 					// Track retry in database
-					if jsonErr := json.Unmarshal(msg.Body, &deployMsg); jsonErr == nil && deployMsg.DeploymentID != "" {
+					if deployMsg.DeploymentID != "" {
 						w.incrementDeploymentRetryCount(deployMsg.DeploymentID, err.Error())
 					}
 
@@ -285,6 +296,23 @@ func (w *Worker) getDeploymentRetryCount(deploymentID string) int {
 	}
 
 	return retryCount
+}
+
+// getDeploymentStatus gets the current status of a deployment
+func (w *Worker) getDeploymentStatus(deploymentID string) string {
+	var status string
+	err := w.db.QueryRow(`
+		SELECT COALESCE(status, '')
+		FROM deployments 
+		WHERE id = $1
+	`, deploymentID).Scan(&status)
+
+	if err != nil {
+		log.Printf("⚠️ Failed to get deployment status from database: %v", err)
+		return ""
+	}
+
+	return status
 }
 
 // incrementDeploymentRetryCount increments the retry count in the database

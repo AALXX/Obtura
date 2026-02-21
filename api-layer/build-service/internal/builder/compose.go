@@ -110,7 +110,7 @@ func getEnvironmentVariables(framework *Framework, serviceName string) map[strin
 	env := make(map[string]string)
 
 	switch {
-	case framework.Name == "Next.js":
+	case framework.Name == "Next.js" || framework.Name == "Bun (Next.js)":
 		env["NODE_ENV"] = "production"
 		env["PORT"] = fmt.Sprintf("%d", framework.Port)
 		env["HOSTNAME"] = "0.0.0.0"
@@ -120,7 +120,31 @@ func getEnvironmentVariables(framework *Framework, serviceName string) map[strin
 		env["HOST"] = "0.0.0.0"
 		env["PORT"] = fmt.Sprintf("%d", framework.Port)
 
-	case framework.Name == "Express.js" || framework.Name == "NestJS" || framework.Name == "Fastify":
+	case framework.Name == "Express.js" || framework.Name == "NestJS" || framework.Name == "Fastify" ||
+		framework.Name == "Koa" || framework.Name == "Bun (Express)":
+		env["NODE_ENV"] = "production"
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
+
+	case strings.HasPrefix(framework.Name, "Astro"):
+		env["NODE_ENV"] = "production"
+		env["HOST"] = "0.0.0.0"
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
+
+	case framework.Name == "Remix":
+		env["NODE_ENV"] = "production"
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
+		env["HOST"] = "0.0.0.0"
+
+	case strings.HasPrefix(framework.Name, "SvelteKit"):
+		env["NODE_ENV"] = "production"
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
+		env["HOST"] = "0.0.0.0"
+
+	case framework.Name == "SolidStart":
+		env["NODE_ENV"] = "production"
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
+
+	case framework.Name == "Hono" || framework.Name == "Bun (Hono)":
 		env["NODE_ENV"] = "production"
 		env["PORT"] = fmt.Sprintf("%d", framework.Port)
 
@@ -143,9 +167,29 @@ func getEnvironmentVariables(framework *Framework, serviceName string) map[strin
 		env["APP_ENV"] = "production"
 		env["APP_DEBUG"] = "false"
 
+	case framework.Name == "Symfony":
+		env["APP_ENV"] = "prod"
+		env["APP_DEBUG"] = "0"
+
 	case framework.Name == "Ruby on Rails":
 		env["RAILS_ENV"] = "production"
 		env["RAILS_SERVE_STATIC_FILES"] = "true"
+
+	case strings.HasPrefix(framework.Name, ".NET") || strings.HasPrefix(framework.Name, "ASP.NET"):
+		env["ASPNETCORE_ENVIRONMENT"] = "Production"
+		env["ASPNETCORE_URLS"] = fmt.Sprintf("http://+: %d", framework.Port)
+
+	case framework.Name == "Phoenix" || strings.HasPrefix(framework.Name, "Elixir"):
+		env["PHX_SERVER"] = "true"
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
+
+	case framework.Name == "Deno":
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
+		env["HOST"] = "0.0.0.0"
+
+	case strings.HasPrefix(framework.Name, "Bun"):
+		env["NODE_ENV"] = "production"
+		env["PORT"] = fmt.Sprintf("%d", framework.Port)
 	}
 
 	return env
@@ -156,14 +200,16 @@ func getHealthCheck(framework *Framework) string {
 	var check strings.Builder
 
 	switch {
-	case framework.Name == "FastAPI":
+	case framework.Name == "FastAPI" || framework.Name == "Django" || framework.Name == "Flask":
 		check.WriteString("      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/health\"]\n")
 		check.WriteString("      interval: 30s\n")
 		check.WriteString("      timeout: 10s\n")
 		check.WriteString("      retries: 3\n")
 		check.WriteString("      start_period: 40s\n")
 
-	case framework.Name == "Express.js" || framework.Name == "NestJS":
+	case framework.Name == "Express.js" || framework.Name == "NestJS" || framework.Name == "Fastify" ||
+		framework.Name == "Koa" || framework.Name == "Hono" || framework.Name == "Bun (Express)" ||
+		framework.Name == "Bun (Hono)":
 		check.WriteString(fmt.Sprintf("      test: [\"CMD\", \"wget\", \"--no-verbose\", \"--tries=1\", \"--spider\", \"http://localhost:%d/health\"]\n", framework.Port))
 		check.WriteString("      interval: 30s\n")
 		check.WriteString("      timeout: 10s\n")
@@ -171,6 +217,30 @@ func getHealthCheck(framework *Framework) string {
 
 	case strings.HasPrefix(framework.Name, "Go"):
 		check.WriteString(fmt.Sprintf("      test: [\"CMD\", \"wget\", \"--no-verbose\", \"--tries=1\", \"--spider\", \"http://localhost:%d/health\"]\n", framework.Port))
+		check.WriteString("      interval: 30s\n")
+		check.WriteString("      timeout: 10s\n")
+		check.WriteString("      retries: 3\n")
+
+	case framework.Name == "Spring Boot":
+		check.WriteString("      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8080/actuator/health\"]\n")
+		check.WriteString("      interval: 30s\n")
+		check.WriteString("      timeout: 10s\n")
+		check.WriteString("      retries: 3\n")
+
+	case strings.HasPrefix(framework.Name, ".NET") || strings.HasPrefix(framework.Name, "ASP.NET"):
+		check.WriteString(fmt.Sprintf("      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:%d/health\"]\n", framework.Port))
+		check.WriteString("      interval: 30s\n")
+		check.WriteString("      timeout: 10s\n")
+		check.WriteString("      retries: 3\n")
+
+	case framework.Name == "Phoenix":
+		check.WriteString("      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:4000/health\"]\n")
+		check.WriteString("      interval: 30s\n")
+		check.WriteString("      timeout: 10s\n")
+		check.WriteString("      retries: 3\n")
+
+	case framework.Name == "Ruby on Rails":
+		check.WriteString("      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:3000/health\"]\n")
 		check.WriteString("      interval: 30s\n")
 		check.WriteString("      timeout: 10s\n")
 		check.WriteString("      retries: 3\n")
@@ -182,13 +252,17 @@ func getHealthCheck(framework *Framework) string {
 // isBackendService checks if a framework is a backend service
 func isBackendService(framework *Framework) bool {
 	backendFrameworks := []string{
-		"Express.js", "NestJS", "Fastify",
+		"Express.js", "NestJS", "Fastify", "Koa", "Hono",
 		"Django", "Flask", "FastAPI",
 		"Go", "Go (Gin)", "Go (Fiber)", "Go (Echo)",
 		"Laravel", "Symfony",
 		"Ruby on Rails", "Sinatra",
-		"Spring Boot",
+		"Spring Boot", "Gradle", "Maven",
 		"Rust (Actix Web)", "Rust (Rocket)",
+		"Phoenix", "Elixir (Plug)",
+		"Deno",
+		"Bun", "Bun (Express)", "Bun (Elysia)", "Bun (Hono)",
+		".NET", "ASP.NET Core", "Blazor Server",
 	}
 
 	for _, backend := range backendFrameworks {
@@ -203,8 +277,18 @@ func isBackendService(framework *Framework) bool {
 func isFrontendService(framework *Framework) bool {
 	frontendFrameworks := []string{
 		"Next.js", "Nuxt.js",
-		"Vite + React", "Vite + Vue",
+		"Vite + React", "Vite + Vue", "Vite + Svelte", "Vite",
 		"Create React App",
+		"Astro", "Astro (SSR)",
+		"Remix",
+		"SvelteKit", "SvelteKit (Static)",
+		"SolidStart", "Solid (Vite)",
+		"Angular",
+		"Gatsby",
+		"Eleventy",
+		"Hexo",
+		"VuePress",
+		"Blazor WebAssembly",
 	}
 
 	for _, frontend := range frontendFrameworks {
@@ -212,7 +296,7 @@ func isFrontendService(framework *Framework) bool {
 			return true
 		}
 	}
-	return false
+	return framework.IsStatic
 }
 
 // getBackendServices returns a list of backend service names from the structure
@@ -233,15 +317,24 @@ func hasDatabase(structure *ProjectStructure) bool {
 		"Laravel", "Symfony",
 		"Ruby on Rails",
 		"Spring Boot",
+		"Phoenix",
+		"Go (Gin)", "Go (Fiber)", "Go (Echo)",
+		"NestJS",
+		"ASP.NET Core",
 	}
 
 	for _, framework := range structure.Frameworks {
 		for _, dbFramework := range databaseFrameworks {
-			if framework.Name == dbFramework {
+			if framework.Name == dbFramework || strings.HasPrefix(framework.Name, dbFramework) {
 				return true
 			}
 		}
 	}
+
+	if structure.Architecture != nil && len(structure.Architecture.Databases) > 0 {
+		return true
+	}
+
 	return false
 }
 

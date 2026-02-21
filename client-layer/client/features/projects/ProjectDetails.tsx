@@ -18,6 +18,7 @@ import MonitoringDashboard from './components/MonitoringDashboard'
 import { useDeploymentUpdates } from '@/hooks/useDeployuseDeploymentUpdates'
 import CreateServiceDialog from './components/CreateServiceDialog'
 import { AIAgentWrapper } from '@/features/ai-agent/components/AIAgentWrapper'
+import Link from 'next/link'
 
 const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; services: { service_name: string; env_vars: Record<string, string> }[] }> = ({ projectData, accessToken, services }) => {
     const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'deploymentHistory' | 'environment' | 'settings' | 'monitoring' | 'builds'>('overview')
@@ -613,43 +614,45 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     return (
         <div className="min-h-screen text-white">
             <div className="border-b border-zinc-800">
-                <div className="container mx-auto px-6 py-6">
-                    <div className="mb-4 flex items-center gap-2 text-sm text-zinc-400">
-                        <span className="cursor-pointer hover:text-white">Projects</span>
+                <div className="container mx-auto px-4 py-4 sm:px-6 sm:py-6">
+                    <div className="mb-3 flex items-center gap-2 text-xs text-zinc-400 sm:mb-4 sm:text-sm">
+                        <Link href="/projects" className="hover:text-white">
+                            <span className="cursor-pointer hover:text-white">Projects</span>
+                        </Link>
                         <span>/</span>
-                        <span className="text-white">{projectData.name}</span>
+                        <span className="truncate text-white">{projectData.name}</span>
                     </div>
 
-                    <div className="flex items-start justify-between">
-                        <div>
-                            <h1 className="mb-2 text-3xl font-bold">{projectData.name}</h1>
-                            <div className="flex items-center gap-4 text-sm text-zinc-400">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0 flex-1">
+                            <h1 className="mb-2 truncate text-2xl font-bold sm:text-3xl">{projectData.name}</h1>
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400 sm:gap-4 sm:text-sm">
                                 <span className="flex items-center gap-1.5">
-                                    <GitBranch size={14} />
-                                    {projectData.slug}
+                                    <GitBranch size={12} className="sm:w-3.5" />
+                                    <span className="truncate">{projectData.slug}</span>
                                 </span>
                                 {projectData.isMonorepo ? (
                                     <span className="flex items-center gap-1.5">
-                                        <Layers size={14} className="text-purple-500" />
+                                        <Layers size={12} className="text-purple-500 sm:w-3.5" />
                                         <span className="text-purple-400">Monorepo</span>
                                     </span>
                                 ) : (
                                     <span className="flex items-center gap-1.5">
-                                        <Code size={14} />
-                                        {projectData.framework}
+                                        <Code size={12} className="sm:w-3.5" />
+                                        <span className="truncate">{projectData.framework}</span>
                                     </span>
                                 )}
                                 <span className="flex items-center gap-1.5">
-                                    <Shield size={14} className="text-green-500" />
-                                    {projectData.teamName}
+                                    <Shield size={12} className="text-green-500 sm:w-3.5" />
+                                    <span className="truncate">{projectData.teamName}</span>
                                 </span>
                             </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
-                            <button onClick={handleStartBuild} className="flex cursor-pointer items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50">
-                                <Hammer size={18} />
-                                Build
+                        <div className="flex flex-wrap gap-2 sm:gap-3">
+                            <button onClick={handleStartBuild} className="flex cursor-pointer items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 sm:px-5 sm:py-2.5 sm:text-sm">
+                                <Hammer size={16} className="sm:w-[18px]" />
+                                <span>Build</span>
                             </button>
 
                             <button
@@ -657,24 +660,26 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                 onClick={() => {
                                     setShowDeployDialog(true)
                                 }}
-                                className="flex cursor-pointer items-center gap-2 rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-50"
+                                className="flex cursor-pointer items-center justify-center gap-2 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-50 sm:px-5 sm:py-2.5 sm:text-sm"
                             >
                                 {isDeploying ? (
                                     <>
-                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                                        Deploying...
+                                        <div className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent sm:h-4 sm:w-4" />
+                                        <span className="hidden sm:inline">Deploying...</span>
+                                        <span className="sm:hidden">Deploying</span>
                                     </>
                                 ) : (
                                     <>
-                                        <Rocket size={18} />
-                                        Deploy to Production
+                                        <Rocket size={16} className="sm:w-[18px]" />
+                                        <span className="hidden sm:inline">Deploy to Production</span>
+                                        <span className="sm:hidden">Deploy</span>
                                     </>
                                 )}
                             </button>
 
-                            <button onClick={() => setShowCreateServiceDialog(true)} className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800">
-                                <Layers size={18} />
-                                Create Service
+                            <button onClick={() => setShowCreateServiceDialog(true)} className="hidden cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 sm:flex sm:px-5 sm:py-2.5 sm:text-sm">
+                                <Layers size={16} className="sm:w-[18px]" />
+                                <span className="hidden md:inline">Create Service</span>
                             </button>
                         </div>
                     </div>
@@ -804,14 +809,18 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             )}
 
             <div className="border-b border-zinc-800">
-                <div className="container mx-auto px-6">
-                    <div className="flex gap-1">
+                <div className="container mx-auto px-4 sm:px-6">
+                    <div className="scrollbar-hide -mx-4 flex gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0">
                         {tabs.map(tab => {
                             const Icon = tab.icon
                             return (
-                                <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === tab.id ? 'border-orange-500 text-white' : 'border-transparent text-zinc-400 hover:text-white'}`}>
-                                    <Icon size={16} />
-                                    {tab.label}
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id as any)}
+                                    className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors sm:gap-2 sm:px-4 sm:py-3 sm:text-sm ${activeTab === tab.id ? 'border-orange-500 text-white' : 'border-transparent text-zinc-400 hover:text-white'}`}
+                                >
+                                    <Icon size={14} className="sm:w-4" />
+                                    <span>{tab.label}</span>
                                 </button>
                             )
                         })}
@@ -819,12 +828,12 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                 </div>
             </div>
 
-            <div className="container mx-auto px-6 py-8">
+            <div className="container mx-auto px-4 py-6 sm:px-6 sm:py-8">
                 {activeTab === 'deployments' && (
                     <div className="space-y-6">
                         <div>
-                            <h2 className="text-xl font-semibold">Deployment Environments</h2>
-                            <p className="text-sm text-zinc-400">Manage and monitor your production and staging deployments</p>
+                            <h2 className="text-lg font-semibold sm:text-xl">Deployment Environments</h2>
+                            <p className="text-xs text-zinc-400 sm:text-sm">Manage and monitor your production and staging deployments</p>
                         </div>
 
                         {(() => {
@@ -896,29 +905,29 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
                                 return (
                                     <div key={`${deployment.type}-${index}`} className="space-y-6">
-                                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-6">
-                                            <div className="mb-6 flex items-center justify-between">
-                                                <div className="flex items-center gap-4">
-                                                    <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${deployment.iconBg}`}>
-                                                        <Icon className={deployment.iconColor} size={24} />
+                                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4 sm:p-6">
+                                            <div className="mb-4 flex flex-col gap-4 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
+                                                <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
+                                                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg sm:h-12 sm:w-12 ${deployment.iconBg}`}>
+                                                        <Icon className={deployment.iconColor} size={20} />
                                                     </div>
-                                                    <div>
-                                                        <a href={`https://${deployment.url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-lg font-semibold">
-                                                            {deployment.url}
-                                                            <ExternalLink size={12} />
+                                                    <div className="min-w-0 flex-1">
+                                                        <a href={`https://${deployment.url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-base font-semibold hover:text-white sm:text-lg">
+                                                            <span className="truncate">{deployment.url}</span>
+                                                            <ExternalLink size={12} className="shrink-0" />
                                                         </a>
-                                                        <div className="flex items-center gap-3">
-                                                            <h3 className="text-sm text-zinc-400 capitalize hover:text-white">{deployment.type}</h3>
-                                                            <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${deployment.statusColor}`}>
-                                                                <CheckCircle2 size={12} />
+                                                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                                                            <h3 className="text-xs text-zinc-400 capitalize hover:text-white sm:text-sm">{deployment.type}</h3>
+                                                            <span className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${deployment.statusColor}`}>
+                                                                <CheckCircle2 size={10} />
                                                                 {deployment.status || 'Unknown'}
                                                             </span>
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <div className="flex items-center gap-3">
+                                                <div className="flex flex-wrap gap-2 sm:items-center sm:gap-3">
                                                     <button
-                                                        className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+                                                        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800 sm:flex-none sm:px-4 sm:py-2 sm:text-sm"
                                                         onClick={() => {
                                                             const matchingDeployment = liveDeployments.find(d => d.environment === deployment.type)
                                                             setCurrentDeploymentId(matchingDeployment?.id || null)
@@ -932,12 +941,13 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                             setShowDeploymentLogs(true)
                                                         }}
                                                     >
-                                                        <Eye size={16} />
-                                                        View Logs
+                                                        <Eye size={14} />
+                                                        <span className="hidden sm:inline">View Logs</span>
+                                                        <span className="sm:hidden">Logs</span>
                                                     </button>
-                                                    <button disabled={isDeploying} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                                                        <RotateCcw size={16} />
-                                                        Redeploy
+                                                    <button disabled={isDeploying} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white hover:bg-orange-600 disabled:opacity-50 sm:flex-none sm:px-4 sm:py-2 sm:text-sm">
+                                                        <RotateCcw size={14} />
+                                                        <span className="hidden sm:inline">Redeploy</span>
                                                     </button>
                                                     <button
                                                         onClick={() => {
@@ -946,10 +956,9 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                                 handleDeleteDeployment(matchingDeployment.id)
                                                             }
                                                         }}
-                                                        className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40"
+                                                        className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-xs font-medium text-red-400 transition-colors hover:bg-red-900/40 sm:px-4 sm:py-2 sm:text-sm"
                                                     >
-                                                        <Trash2 size={16} />
-                                                        Delete
+                                                        <Trash2 size={14} />
                                                     </button>
                                                 </div>
                                             </div>
@@ -1098,154 +1107,257 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                     <div className="space-y-6">
                         <div className="flex items-center justify-between">
                             <div>
-                                <h2 className="text-xl font-semibold">Deployment History</h2>
-                                <p className="text-sm text-zinc-400">Showing {liveDeployments.length} recent deployments</p>
+                                <h2 className="text-lg font-semibold sm:text-xl">Deployment History</h2>
+                                <p className="text-xs text-zinc-400 sm:text-sm">Showing {liveDeployments.length} recent deployments</p>
                             </div>
                         </div>
 
                         {liveDeployments.length === 0 ? (
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-12 text-center">
-                                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900">
-                                    <Rocket className="text-zinc-600" size={32} />
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-8 text-center sm:p-12">
+                                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-900 sm:h-16 sm:w-16">
+                                    <Rocket className="text-zinc-600" size={24} />
                                 </div>
-                                <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Deployments Yet</h3>
-                                <p className="mb-6 text-sm text-zinc-500">Your deployment history will appear here</p>
+                                <h3 className="mb-2 text-base font-semibold text-zinc-300 sm:text-lg">No Deployments Yet</h3>
+                                <p className="mb-6 text-xs text-zinc-500 sm:text-sm">Your deployment history will appear here</p>
                             </div>
                         ) : (
-                            <div className="overflow-hidden rounded-lg border border-zinc-800 bg-[#1b1b1b]">
-                                <table className="w-full">
-                                    <thead className="border-b border-zinc-800 bg-zinc-900/50">
-                                        <tr>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Status</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Environment</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Branch</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Commit</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Strategy</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Deployed</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Duration</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Traffic</th>
-                                            <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-zinc-800">
-                                        {liveDeployments.map(deployment => {
-                                            const getStatusDisplay = () => {
-                                                // Check if deployment has a build in progress
-                                                if (deployment.buildId && deployment.buildStatus && ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus)) {
-                                                    return { icon: Loader2, text: 'Building', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
-                                                }
-                                                switch (deployment.status) {
-                                                    case 'pending':
-                                                        return { icon: Clock, text: 'Pending', color: 'text-blue-500', bgColor: 'bg-blue-500/10' }
-                                                    case 'deploying':
-                                                        return { icon: Loader2, text: 'Deploying', color: 'text-orange-500', bgColor: 'bg-orange-500/10', spin: true }
-                                                    case 'active':
-                                                        return { icon: CheckCircle2, text: 'Active', color: 'text-green-500', bgColor: 'bg-green-500/10' }
-                                                    case 'failed':
-                                                        return { icon: XCircle, text: 'Failed', color: 'text-red-500', bgColor: 'bg-red-500/10' }
-                                                    case 'rolled_back':
-                                                        return { icon: RotateCcw, text: 'Rolled Back', color: 'text-yellow-500', bgColor: 'bg-yellow-500/10' }
-                                                    case 'terminated':
-                                                        return { icon: XCircle, text: 'Terminated', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
-                                                    default:
-                                                        return { icon: Clock, text: 'Unknown', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
-                                                }
+                            <>
+                                {/* Mobile Card View */}
+                                <div className="space-y-3 sm:hidden">
+                                    {liveDeployments.map(deployment => {
+                                        const getStatusDisplay = () => {
+                                            if (deployment.buildId && deployment.buildStatus && ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus)) {
+                                                return { icon: Loader2, text: 'Building', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
                                             }
-
-                                            const statusDisplay = getStatusDisplay()
-                                            const StatusIcon = statusDisplay.icon
-
-                                            const getEnvironmentColor = () => {
-                                                switch (deployment.environment) {
-                                                    case 'production':
-                                                        return 'bg-green-500/10 text-green-500'
-                                                    case 'staging':
-                                                        return 'bg-blue-500/10 text-blue-500'
-                                                    case 'preview':
-                                                        return 'bg-purple-500/10 text-purple-500'
-                                                    default:
-                                                        return 'bg-zinc-500/10 text-zinc-500'
-                                                }
+                                            switch (deployment.status) {
+                                                case 'pending':
+                                                    return { icon: Clock, text: 'Pending', color: 'text-blue-500', bgColor: 'bg-blue-500/10' }
+                                                case 'deploying':
+                                                    return { icon: Loader2, text: 'Deploying', color: 'text-orange-500', bgColor: 'bg-orange-500/10', spin: true }
+                                                case 'active':
+                                                    return { icon: CheckCircle2, text: 'Active', color: 'text-green-500', bgColor: 'bg-green-500/10' }
+                                                case 'failed':
+                                                    return { icon: XCircle, text: 'Failed', color: 'text-red-500', bgColor: 'bg-red-500/10' }
+                                                case 'rolled_back':
+                                                    return { icon: RotateCcw, text: 'Rolled Back', color: 'text-yellow-500', bgColor: 'bg-yellow-500/10' }
+                                                case 'terminated':
+                                                    return { icon: XCircle, text: 'Terminated', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
+                                                default:
+                                                    return { icon: Clock, text: 'Unknown', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
                                             }
+                                        }
 
-                                            return (
-                                                <tr key={deployment.id} className="transition-colors hover:bg-zinc-900/50">
-                                                    <td className="px-6 py-4">
-                                                        <div className="flex items-center gap-2">
-                                                            <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${statusDisplay.bgColor}`}>
-                                                                <StatusIcon className={`${statusDisplay.color} ${statusDisplay.spin ? 'animate-spin' : ''}`} size={16} />
-                                                            </div>
-                                                            <span className={`text-sm font-medium ${statusDisplay.color}`}>{statusDisplay.text}</span>
+                                        const statusDisplay = getStatusDisplay()
+                                        const StatusIcon = statusDisplay.icon
+
+                                        const getEnvironmentColor = () => {
+                                            switch (deployment.environment) {
+                                                case 'production':
+                                                    return 'bg-green-500/10 text-green-500'
+                                                case 'staging':
+                                                    return 'bg-blue-500/10 text-blue-500'
+                                                case 'preview':
+                                                    return 'bg-purple-500/10 text-purple-500'
+                                                default:
+                                                    return 'bg-zinc-500/10 text-zinc-500'
+                                            }
+                                        }
+
+                                        return (
+                                            <div key={deployment.id} className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
+                                                <div className="mb-3 flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${statusDisplay.bgColor}`}>
+                                                            <StatusIcon className={`${statusDisplay.color} ${statusDisplay.spin ? 'animate-spin' : ''}`} size={16} />
                                                         </div>
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${getEnvironmentColor()}`}>{deployment.environment}</span>
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="flex items-center gap-1.5 text-sm text-zinc-300">
-                                                            <GitBranch size={14} className="text-zinc-500" />
-                                                            {deployment.branch}
+                                                        <span className={`text-xs font-medium ${statusDisplay.color}`}>{statusDisplay.text}</span>
+                                                    </div>
+                                                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize ${getEnvironmentColor()}`}>{deployment.environment}</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3 text-xs">
+                                                    <div>
+                                                        <div className="text-zinc-500">Branch</div>
+                                                        <div className="flex items-center gap-1 text-zinc-300">
+                                                            <GitBranch size={12} className="text-zinc-500" />
+                                                            <span className="truncate">{deployment.branch}</span>
                                                         </div>
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="font-mono text-xs text-zinc-400">{deployment.commitHash.substring(0, 7)}</div>
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="text-sm text-zinc-400 capitalize">{deployment.deploymentStrategy.replace('_', ' ')}</div>
-                                                        {deployment.strategyPhase && <div className="text-xs text-zinc-600">{deployment.strategyPhase}</div>}
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="text-sm text-zinc-400">{deployment.startedAt}</div>
-                                                        {deployment.deployedBy && <div className="text-xs text-zinc-600">{deployment.deployedBy}</div>}
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="text-sm text-zinc-400">{deployment.duration || '-'}</div>
-                                                        {deployment.buildTime && <div className="text-xs text-zinc-600">Build: {deployment.buildTime}</div>}
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="text-sm text-zinc-400">{deployment.trafficPercentage}%</div>
-                                                        {deployment.trafficSwitchCount > 0 && (
-                                                            <div className="flex items-center gap-1 text-xs text-blue-400">
-                                                                <TrendingUp size={12} />
-                                                                {deployment.trafficSwitchCount} switch{deployment.trafficSwitchCount > 1 ? 'es' : ''}
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-zinc-500">Commit</div>
+                                                        <div className="font-mono text-zinc-400">{deployment.commitHash?.substring(0, 7) || 'N/A'}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-zinc-500">Strategy</div>
+                                                        <div className="text-zinc-400 capitalize">{deployment.deploymentStrategy?.replace('_', ' ')}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-zinc-500">Duration</div>
+                                                        <div className="text-zinc-400">{deployment.duration || '-'}</div>
+                                                    </div>
+                                                </div>
+                                                <div className="mt-3 flex gap-2">
+                                                    <button
+                                                        className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
+                                                        onClick={() => {
+                                                            setCurrentDeploymentId(deployment.id)
+                                                            setCurrentDeploymentBuildId(deployment.buildId || null)
+                                                            setDeploymentEnvironment(deployment.environment)
+                                                            setDeploymentStrategy(deployment.deploymentStrategy)
+                                                            setCurrentDeploymentMode('history')
+                                                            setIsBuildAndDeploy(false)
+                                                            const containers = (deployment as any).containers || []
+                                                            setCurrentContainers(containers as Container[])
+                                                            setShowDeploymentLogs(true)
+                                                        }}
+                                                    >
+                                                        <Eye size={14} />
+                                                        View
+                                                    </button>
+                                                    <button onClick={() => handleDeleteDeployment(deployment.id)} className="flex items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-xs font-medium text-red-400 transition-colors hover:bg-red-900/40">
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+
+                                {/* Desktop Table View */}
+                                <div className="hidden overflow-hidden rounded-lg border border-zinc-800 bg-[#1b1b1b] sm:block">
+                                    <table className="w-full">
+                                        <thead className="border-b border-zinc-800 bg-zinc-900/50">
+                                            <tr>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Status</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Environment</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Branch</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Commit</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Strategy</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Deployed</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Duration</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Traffic</th>
+                                                <th className="px-6 py-4 text-left text-xs font-medium tracking-wider text-zinc-400 uppercase">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-zinc-800">
+                                            {liveDeployments.map(deployment => {
+                                                const getStatusDisplay = () => {
+                                                    // Check if deployment has a build in progress
+                                                    if (deployment.buildId && deployment.buildStatus && ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus)) {
+                                                        return { icon: Loader2, text: 'Building', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
+                                                    }
+                                                    switch (deployment.status) {
+                                                        case 'pending':
+                                                            return { icon: Clock, text: 'Pending', color: 'text-blue-500', bgColor: 'bg-blue-500/10' }
+                                                        case 'deploying':
+                                                            return { icon: Loader2, text: 'Deploying', color: 'text-orange-500', bgColor: 'bg-orange-500/10', spin: true }
+                                                        case 'active':
+                                                            return { icon: CheckCircle2, text: 'Active', color: 'text-green-500', bgColor: 'bg-green-500/10' }
+                                                        case 'failed':
+                                                            return { icon: XCircle, text: 'Failed', color: 'text-red-500', bgColor: 'bg-red-500/10' }
+                                                        case 'rolled_back':
+                                                            return { icon: RotateCcw, text: 'Rolled Back', color: 'text-yellow-500', bgColor: 'bg-yellow-500/10' }
+                                                        case 'terminated':
+                                                            return { icon: XCircle, text: 'Terminated', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
+                                                        default:
+                                                            return { icon: Clock, text: 'Unknown', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
+                                                    }
+                                                }
+
+                                                const statusDisplay = getStatusDisplay()
+                                                const StatusIcon = statusDisplay.icon
+
+                                                const getEnvironmentColor = () => {
+                                                    switch (deployment.environment) {
+                                                        case 'production':
+                                                            return 'bg-green-500/10 text-green-500'
+                                                        case 'staging':
+                                                            return 'bg-blue-500/10 text-blue-500'
+                                                        case 'preview':
+                                                            return 'bg-purple-500/10 text-purple-500'
+                                                        default:
+                                                            return 'bg-zinc-500/10 text-zinc-500'
+                                                    }
+                                                }
+
+                                                return (
+                                                    <tr key={deployment.id} className="transition-colors hover:bg-zinc-900/50">
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${statusDisplay.bgColor}`}>
+                                                                    <StatusIcon className={`${statusDisplay.color} ${statusDisplay.spin ? 'animate-spin' : ''}`} size={16} />
+                                                                </div>
+                                                                <span className={`text-sm font-medium ${statusDisplay.color}`}>{statusDisplay.text}</span>
                                                             </div>
-                                                        )}
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="flex items-center gap-2">
-                                                            {deployment.buildId && deployment.buildStatus && ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus) && (
-                                                                <span className="flex items-center gap-1 text-xs text-blue-400">
-                                                                    <Loader2 size={12} className="animate-spin" />
-                                                                    Building
-                                                                </span>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${getEnvironmentColor()}`}>{deployment.environment}</span>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex items-center gap-1.5 text-sm text-zinc-300">
+                                                                <GitBranch size={14} className="text-zinc-500" />
+                                                                {deployment.branch}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="font-mono text-xs text-zinc-400">{deployment.commitHash.substring(0, 7)}</div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="text-sm text-zinc-400 capitalize">{deployment.deploymentStrategy.replace('_', ' ')}</div>
+                                                            {deployment.strategyPhase && <div className="text-xs text-zinc-600">{deployment.strategyPhase}</div>}
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="text-sm text-zinc-400">{deployment.startedAt}</div>
+                                                            {deployment.deployedBy && <div className="text-xs text-zinc-600">{deployment.deployedBy}</div>}
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="text-sm text-zinc-400">{deployment.duration || '-'}</div>
+                                                            {deployment.buildTime && <div className="text-xs text-zinc-600">Build: {deployment.buildTime}</div>}
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="text-sm text-zinc-400">{deployment.trafficPercentage}%</div>
+                                                            {deployment.trafficSwitchCount > 0 && (
+                                                                <div className="flex items-center gap-1 text-xs text-blue-400">
+                                                                    <TrendingUp size={12} />
+                                                                    {deployment.trafficSwitchCount} switch{deployment.trafficSwitchCount > 1 ? 'es' : ''}
+                                                                </div>
                                                             )}
-                                                            <button
-                                                                className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
-                                                                onClick={() => {
-                                                                    setCurrentDeploymentId(deployment.id)
-                                                                    setCurrentDeploymentBuildId(deployment.buildId || null)
-                                                                    setDeploymentEnvironment(deployment.environment)
-                                                                    setDeploymentStrategy(deployment.deploymentStrategy)
-                                                                    setCurrentDeploymentMode('history')
-                                                                    setIsBuildAndDeploy(false)
-                                                                    const containers = (deployment as any).containers || []
-                                                                    setCurrentContainers(containers as Container[])
-                                                                    setShowDeploymentLogs(true)
-                                                                }}
-                                                            >
-                                                                <Eye size={16} />
-                                                            </button>
-                                                            <button onClick={() => handleDeleteDeployment(deployment.id)} className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40">
-                                                                <Trash2 size={16} />
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            )
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex items-center gap-2">
+                                                                {deployment.buildId && deployment.buildStatus && ['queued', 'cloning', 'installing', 'building'].includes(deployment.buildStatus) && (
+                                                                    <span className="flex items-center gap-1 text-xs text-blue-400">
+                                                                        <Loader2 size={12} className="animate-spin" />
+                                                                        Building
+                                                                    </span>
+                                                                )}
+                                                                <button
+                                                                    className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
+                                                                    onClick={() => {
+                                                                        setCurrentDeploymentId(deployment.id)
+                                                                        setCurrentDeploymentBuildId(deployment.buildId || null)
+                                                                        setDeploymentEnvironment(deployment.environment)
+                                                                        setDeploymentStrategy(deployment.deploymentStrategy)
+                                                                        setCurrentDeploymentMode('history')
+                                                                        setIsBuildAndDeploy(false)
+                                                                        const containers = (deployment as any).containers || []
+                                                                        setCurrentContainers(containers as Container[])
+                                                                        setShowDeploymentLogs(true)
+                                                                    }}
+                                                                >
+                                                                    <Eye size={16} />
+                                                                </button>
+                                                                <button onClick={() => handleDeleteDeployment(deployment.id)} className="flex cursor-pointer items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/40">
+                                                                    <Trash2 size={16} />
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </>
                         )}
                     </div>
                 )}
@@ -1255,39 +1367,39 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                         {projectData.isMonorepo && projectData.frameworks && projectData.frameworks.length > 0 && (
                             <div className="space-y-4">
                                 <div className="flex items-center gap-2">
-                                    <Layers className="text-purple-500" size={20} />
-                                    <h2 className="text-xl font-semibold">Monorepo Applications</h2>
+                                    <Layers className="text-purple-500" size={18} />
+                                    <h2 className="text-lg font-semibold sm:text-xl">Monorepo Applications</h2>
                                 </div>
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2">
                                     {projectData.frameworks.map((framework, idx) => (
-                                        <div key={idx} className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                            <div className="mb-4 flex items-start justify-between">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/10">
-                                                        <Package className="text-purple-500" size={20} />
+                                        <div key={idx} className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4 sm:p-5">
+                                            <div className="mb-3 flex items-start justify-between sm:mb-4">
+                                                <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+                                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-purple-500/10 sm:h-10 sm:w-10">
+                                                        <Package className="text-purple-500" size={16} />
                                                     </div>
-                                                    <div>
-                                                        <div className="font-semibold">{framework.Name}</div>
-                                                        <div className="text-sm text-zinc-400">{framework.Path}</div>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="truncate text-sm font-semibold sm:text-base">{framework.Name}</div>
+                                                        <div className="truncate text-xs text-zinc-400 sm:text-sm">{framework.Path}</div>
                                                     </div>
                                                 </div>
-                                                <span className="rounded-full bg-purple-500/10 px-2 py-1 text-xs text-purple-400">Port {framework.Port}</span>
+                                                <span className="shrink-0 rounded-full bg-purple-500/10 px-2 py-1 text-xs text-purple-400">Port {framework.Port}</span>
                                             </div>
 
-                                            <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div className="grid grid-cols-2 gap-2 text-xs sm:gap-3 sm:text-sm">
                                                 <div>
-                                                    <div className="text-zinc-400">Runtime</div>
-                                                    <div className="font-medium">{framework.Runtime}</div>
+                                                    <div className="text-zinc-500">Runtime</div>
+                                                    <div className="truncate font-medium">{framework.Runtime}</div>
                                                 </div>
                                                 {framework.Version && (
                                                     <div>
-                                                        <div className="text-zinc-400">Version</div>
+                                                        <div className="text-zinc-500">Version</div>
                                                         <div className="font-medium">{framework.Version}</div>
                                                     </div>
                                                 )}
                                                 <div className="col-span-2">
-                                                    <div className="text-zinc-400">Build Command</div>
-                                                    <div className="font-mono text-xs font-medium text-orange-400">{framework.BuildCmd}</div>
+                                                    <div className="text-zinc-500">Build Command</div>
+                                                    <div className="truncate font-mono text-xs font-medium text-orange-400">{framework.BuildCmd}</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -1296,82 +1408,82 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                             </div>
                         )}
 
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <Activity size={16} />
+                        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-3 sm:p-4">
+                                <div className="mb-1 flex items-center gap-2 text-xs text-zinc-400 sm:text-sm">
+                                    <Activity size={14} className="sm:w-4" />
                                     Uptime
                                 </div>
-                                <div className="text-2xl font-bold text-green-500">{projectData.metrics.uptime}</div>
+                                <div className="text-lg font-bold text-green-500 sm:text-2xl">{projectData.metrics.uptime}</div>
                             </div>
 
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <Zap size={16} />
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-3 sm:p-4">
+                                <div className="mb-1 flex items-center gap-2 text-xs text-zinc-400 sm:text-sm">
+                                    <Zap size={14} className="sm:w-4" />
                                     Response Time
                                 </div>
-                                <div className="text-2xl font-bold">{projectData.metrics.avgResponseTime}</div>
+                                <div className="text-lg font-bold sm:text-2xl">{projectData.metrics.avgResponseTime}</div>
                             </div>
 
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <TrendingUp size={16} />
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-3 sm:p-4">
+                                <div className="mb-1 flex items-center gap-2 text-xs text-zinc-400 sm:text-sm">
+                                    <TrendingUp size={14} className="sm:w-4" />
                                     Requests (24h)
                                 </div>
-                                <div className="text-2xl font-bold">{projectData.metrics.requests24h}</div>
+                                <div className="text-lg font-bold sm:text-2xl">{projectData.metrics.requests24h}</div>
                             </div>
 
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                <div className="mb-1 flex items-center gap-2 text-sm text-zinc-400">
-                                    <AlertCircle size={16} />
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-3 sm:p-4">
+                                <div className="mb-1 flex items-center gap-2 text-xs text-zinc-400 sm:text-sm">
+                                    <AlertCircle size={14} className="sm:w-4" />
                                     Errors (24h)
                                 </div>
-                                <div className="text-2xl font-bold text-yellow-500">{projectData.metrics.errors24h}</div>
+                                <div className="text-lg font-bold text-yellow-500 sm:text-2xl">{projectData.metrics.errors24h}</div>
                             </div>
                         </div>
 
                         <div className="space-y-4">
-                            <h2 className="text-xl font-semibold">Environments</h2>
+                            <h2 className="text-lg font-semibold sm:text-xl">Environments</h2>
 
                             {!hasDeployments ? (
-                                <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-12 text-center">
-                                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900">
-                                        <Rocket className="text-zinc-600" size={32} />
+                                <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-8 text-center sm:p-12">
+                                    <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-900 sm:h-16 sm:w-16">
+                                        <Rocket className="text-zinc-600" size={24} />
                                     </div>
-                                    <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Deployments Yet</h3>
-                                    <p className="mb-6 text-sm text-zinc-500">Get started by deploying your project to production or staging</p>
-                                    <button className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-medium text-white hover:bg-orange-600">
-                                        <Rocket size={18} />
+                                    <h3 className="mb-2 text-base font-semibold text-zinc-300 sm:text-lg">No Deployments Yet</h3>
+                                    <p className="mb-6 text-xs text-zinc-500 sm:text-sm">Get started by deploying your project to production or staging</p>
+                                    <button className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-xs font-medium text-white hover:bg-orange-600 sm:px-6 sm:py-3 sm:text-sm">
+                                        <Rocket size={16} />
                                         Deploy Now
                                     </button>
                                 </div>
                             ) : (
                                 <>
                                     {productionEnv?.url && (
-                                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                            <div className="mb-4 flex items-center justify-between">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10">
-                                                        <Globe className="text-green-500" size={20} />
+                                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4 sm:p-5">
+                                            <div className="mb-3 flex flex-col gap-3 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
+                                                <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+                                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-green-500/10 sm:h-10 sm:w-10">
+                                                        <Globe className="text-green-500" size={16} />
                                                     </div>
-                                                    <div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="font-semibold">Production</span>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="text-sm font-semibold sm:text-base">Production</span>
                                                             <span className="flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-xs text-green-500">
-                                                                <CheckCircle2 size={12} />
+                                                                <CheckCircle2 size={10} />
                                                                 Live
                                                             </span>
                                                         </div>
-                                                        <a href={productionEnv.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
-                                                            {productionEnv.url}
-                                                            <ExternalLink size={12} />
+                                                        <a href={productionEnv.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-zinc-400 hover:text-white sm:text-sm">
+                                                            <span className="truncate">{productionEnv.url}</span>
+                                                            <ExternalLink size={10} className="shrink-0" />
                                                         </a>
                                                     </div>
                                                 </div>
 
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex gap-2 sm:items-center">
                                                     <button
-                                                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800"
+                                                        className="flex flex-1 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-white hover:bg-zinc-800 sm:flex-none sm:px-3 sm:py-1.5 sm:text-sm"
                                                         onClick={() => {
                                                             const matchingDeployment = liveDeployments.find(d => d.environment === 'production')
                                                             setCurrentDeploymentId(matchingDeployment?.id || null)
@@ -1385,29 +1497,29 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                                             setShowDeploymentLogs(true)
                                                         }}
                                                     >
-                                                        <Eye size={16} />
+                                                        <Eye size={14} />
                                                     </button>
-                                                    <button className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
-                                                        <RotateCcw size={16} />
+                                                    <button className="flex flex-1 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-white hover:bg-zinc-800 sm:flex-none sm:px-3 sm:py-1.5 sm:text-sm">
+                                                        <RotateCcw size={14} />
                                                     </button>
                                                 </div>
                                             </div>
 
-                                            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                            <div className="grid grid-cols-2 gap-3 text-xs sm:gap-4 sm:text-sm md:grid-cols-4">
                                                 <div>
-                                                    <div className="text-zinc-400">Last Deploy</div>
-                                                    <div className="font-medium">{productionEnv.lastDeployment}</div>
+                                                    <div className="text-zinc-500">Last Deploy</div>
+                                                    <div className="truncate font-medium">{productionEnv.lastDeployment}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-zinc-400">Branch</div>
-                                                    <div className="font-medium">{productionEnv.branch || 'N/A'}</div>
+                                                    <div className="text-zinc-500">Branch</div>
+                                                    <div className="truncate font-medium">{productionEnv.branch || 'N/A'}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-zinc-400">Build Time</div>
+                                                    <div className="text-zinc-500">Build Time</div>
                                                     <div className="font-medium">{productionEnv.buildTime || 'N/A'}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-zinc-400">Commit</div>
+                                                    <div className="text-zinc-500">Commit</div>
                                                     <div className="truncate font-medium">{productionEnv.commitHash || 'N/A'}</div>
                                                 </div>
                                             </div>
@@ -1415,48 +1527,48 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
                                     )}
 
                                     {stagingEnv?.url && (
-                                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
-                                            <div className="mb-4 flex items-center justify-between">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
-                                                        <Server className="text-blue-500" size={20} />
+                                        <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4 sm:p-5">
+                                            <div className="mb-3 flex flex-col gap-3 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
+                                                <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+                                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 sm:h-10 sm:w-10">
+                                                        <Server className="text-blue-500" size={16} />
                                                     </div>
-                                                    <div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="font-semibold">Staging</span>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="text-sm font-semibold sm:text-base">Staging</span>
                                                             <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs text-blue-500">
-                                                                <CheckCircle2 size={12} />
+                                                                <CheckCircle2 size={10} />
                                                                 Ready
                                                             </span>
                                                         </div>
-                                                        <a href={stagingEnv.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
-                                                            {stagingEnv.url}
-                                                            <ExternalLink size={12} />
+                                                        <a href={stagingEnv.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-zinc-400 hover:text-white sm:text-sm">
+                                                            <span className="truncate">{stagingEnv.url}</span>
+                                                            <ExternalLink size={10} className="shrink-0" />
                                                         </a>
                                                     </div>
                                                 </div>
 
-                                                <button className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
-                                                    <Rocket size={16} />
-                                                    Deploy
+                                                <button className="flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600 sm:px-4 sm:py-2 sm:text-sm">
+                                                    <Rocket size={14} />
+                                                    <span>Deploy</span>
                                                 </button>
                                             </div>
 
-                                            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                            <div className="grid grid-cols-2 gap-3 text-xs sm:gap-4 sm:text-sm md:grid-cols-4">
                                                 <div>
-                                                    <div className="text-zinc-400">Last Deploy</div>
-                                                    <div className="font-medium">{stagingEnv.lastDeployment}</div>
+                                                    <div className="text-zinc-500">Last Deploy</div>
+                                                    <div className="truncate font-medium">{stagingEnv.lastDeployment}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-zinc-400">Branch</div>
-                                                    <div className="font-medium">{stagingEnv.branch || 'N/A'}</div>
+                                                    <div className="text-zinc-500">Branch</div>
+                                                    <div className="truncate font-medium">{stagingEnv.branch || 'N/A'}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-zinc-400">Build Time</div>
+                                                    <div className="text-zinc-500">Build Time</div>
                                                     <div className="font-medium">{stagingEnv.buildTime || 'N/A'}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-zinc-400">Commit</div>
+                                                    <div className="text-zinc-500">Commit</div>
                                                     <div className="truncate font-medium">{stagingEnv.commitHash || 'N/A'}</div>
                                                 </div>
                                             </div>
@@ -1465,21 +1577,21 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
                                     {projectData.preview.length > 0 && (
                                         <div>
-                                            <h3 className="mb-3 text-lg font-semibold">Preview Deployments</h3>
+                                            <h3 className="mb-3 text-base font-semibold sm:text-lg">Preview Deployments</h3>
                                             {projectData.preview.map((preview, idx) => (
-                                                <div key={idx} className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="flex items-center gap-3">
-                                                            <GitBranch className="text-purple-500" size={18} />
-                                                            <div>
-                                                                <div className="font-medium">{preview.branch}</div>
-                                                                <a href={preview.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
-                                                                    {preview.url}
-                                                                    <ExternalLink size={12} />
+                                                <div key={idx} className="mb-2 rounded-lg border border-zinc-800 bg-[#1b1b1b] p-3 sm:p-4">
+                                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                                                            <GitBranch className="shrink-0 text-purple-500" size={14} />
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="truncate text-xs font-medium sm:text-sm">{preview.branch}</div>
+                                                                <a href={preview.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-zinc-400 hover:text-white">
+                                                                    <span className="truncate">{preview.url}</span>
+                                                                    <ExternalLink size={10} className="shrink-0" />
                                                                 </a>
                                                             </div>
                                                         </div>
-                                                        <div className="text-sm text-zinc-400">{preview.createdAt}</div>
+                                                        <div className="text-xs text-zinc-400">{preview.createdAt}</div>
                                                     </div>
                                                 </div>
                                             ))}
@@ -1493,31 +1605,34 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
                 {activeTab === 'environment' && (
                     <div className="space-y-6">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                             <div>
-                                <h2 className="text-xl font-semibold">Environment Variables</h2>
-                                <p className="text-sm text-zinc-400">Manage environment variables for your deployments</p>
+                                <h2 className="text-lg font-semibold sm:text-xl">Environment Variables</h2>
+                                <p className="text-xs text-zinc-400 sm:text-sm">Manage environment variables for your deployments</p>
                             </div>
-                            <div className="flex items-center gap-3">
-                                <button onClick={() => setShowEnvFileDialog(true)} className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
-                                    <Upload size={16} />
-                                    Upload .env File
+                            <div className="flex flex-wrap gap-2">
+                                <button onClick={() => setShowEnvFileDialog(true)} className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800 sm:flex-none sm:px-4 sm:text-sm">
+                                    <Upload size={14} className="sm:w-4" />
+                                    <span className="hidden sm:inline">Upload .env File</span>
+                                    <span className="sm:hidden">Upload</span>
                                 </button>
-                                <button onClick={() => setShowAddEnv(true)} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
-                                    <Plus size={16} />
-                                    Add Variable
+                                <button onClick={() => setShowAddEnv(true)} className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white hover:bg-orange-600 sm:flex-none sm:px-4 sm:text-sm">
+                                    <Plus size={14} className="sm:w-4" />
+                                    <span className="hidden sm:inline">Add Variable</span>
+                                    <span className="sm:hidden">Add</span>
                                 </button>
                                 {hasChanges && (
-                                    <button onClick={handleSaveAllChanges} disabled={isSaving} className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50">
+                                    <button onClick={handleSaveAllChanges} disabled={isSaving} className="flex items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50 sm:px-4 sm:text-sm">
                                         {isSaving ? (
                                             <>
-                                                <div className="h-4 w-4 animate-spin cursor-pointer rounded-full border-2 border-white border-t-transparent" />
-                                                Saving...
+                                                <div className="h-3 w-3 animate-spin cursor-pointer rounded-full border-2 border-white border-t-transparent sm:h-4 sm:w-4" />
+                                                <span>Saving...</span>
                                             </>
                                         ) : (
                                             <>
-                                                <Save size={16} />
-                                                Update Variables
+                                                <Save size={14} className="sm:w-4" />
+                                                <span className="hidden sm:inline">Update Variables</span>
+                                                <span className="sm:hidden">Save</span>
                                             </>
                                         )}
                                     </button>
@@ -1600,34 +1715,127 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
                 {activeTab === 'builds' && (
                     <div className="space-y-6">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
-                                <h2 className="text-xl font-semibold">Build History</h2>
-                                <p className="text-sm text-zinc-400">
+                                <h2 className="text-lg font-semibold sm:text-xl">Build History</h2>
+                                <p className="text-xs text-zinc-400 sm:text-sm">
                                     Showing {indexOfFirstBuild + 1}-{Math.min(indexOfLastBuild, liveBuilds.length)} of {liveBuilds.length} builds
                                 </p>
                             </div>
-                            <button onClick={handleStartBuild} className="flex cursor-pointer items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50">
-                                <Hammer size={18} />
-                                Build
+                            <button onClick={handleStartBuild} className="flex cursor-pointer items-center justify-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 sm:px-5 sm:py-2.5 sm:text-sm">
+                                <Hammer size={16} />
+                                <span>Build</span>
                             </button>
                         </div>
 
                         {liveBuilds.length === 0 ? (
-                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-12 text-center">
-                                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900">
-                                    <Hammer className="text-zinc-600" size={32} />
+                            <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-8 text-center sm:p-12">
+                                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-900 sm:h-16 sm:w-16">
+                                    <Hammer className="text-zinc-600" size={24} />
                                 </div>
-                                <h3 className="mb-2 text-lg font-semibold text-zinc-300">No Builds Yet</h3>
-                                <p className="mb-6 text-sm text-zinc-500">Start your first build to see it here</p>
-                                <button onClick={handleStartBuild} className="flex cursor-pointer items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50">
-                                    <Hammer size={18} />
-                                    Build
+                                <h3 className="mb-2 text-base font-semibold text-zinc-300 sm:text-lg">No Builds Yet</h3>
+                                <p className="mb-6 text-xs text-zinc-500 sm:text-sm">Start your first build to see it here</p>
+                                <button onClick={handleStartBuild} className="flex cursor-pointer items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-600 sm:px-5 sm:py-2.5 sm:text-sm">
+                                    <Hammer size={16} />
+                                    <span>Build</span>
                                 </button>
                             </div>
                         ) : (
                             <>
-                                <div className="overflow-hidden rounded-lg border border-zinc-800 bg-[#1b1b1b]">
+                                {/* Mobile Card View */}
+                                <div className="space-y-3 sm:hidden">
+                                    {currentBuilds.map(build => {
+                                        const getStatusDisplay = () => {
+                                            switch (build.status) {
+                                                case 'queued':
+                                                    return { icon: Clock, text: 'Queued', color: 'text-blue-500', bgColor: 'bg-blue-500/10' }
+                                                case 'cloning':
+                                                    return { icon: Loader2, text: 'Cloning', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
+                                                case 'installing':
+                                                    return { icon: Loader2, text: 'Installing', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
+                                                case 'building':
+                                                    return { icon: Loader2, text: 'Building', color: 'text-blue-500', bgColor: 'bg-blue-500/10', spin: true }
+                                                case 'deploying':
+                                                    return { icon: Loader2, text: 'Deploying', color: 'text-orange-500', bgColor: 'bg-orange-500/10', spin: true }
+                                                case 'success':
+                                                    return { icon: CheckCircle2, text: 'Success', color: 'text-green-500', bgColor: 'bg-green-500/10' }
+                                                case 'failed':
+                                                    return { icon: XCircle, text: 'Failed', color: 'text-red-500', bgColor: 'bg-red-500/10' }
+                                                case 'cancelled':
+                                                    return { icon: XCircle, text: 'Cancelled', color: 'text-yellow-500', bgColor: 'bg-yellow-500/10' }
+                                                default:
+                                                    return { icon: Clock, text: 'Unknown', color: 'text-zinc-500', bgColor: 'bg-zinc-500/10' }
+                                            }
+                                        }
+
+                                        const statusDisplay = getStatusDisplay()
+                                        const StatusIcon = statusDisplay.icon
+                                        const isBuilding = ['queued', 'cloning', 'installing', 'building', 'deploying'].includes(build.status)
+
+                                        return (
+                                            <div key={build.id} className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-4">
+                                                <div className="mb-3 flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${statusDisplay.bgColor}`}>
+                                                            <StatusIcon className={`${statusDisplay.color} ${statusDisplay.spin ? 'animate-spin' : ''}`} size={16} />
+                                                        </div>
+                                                        <span className={`text-xs font-medium ${statusDisplay.color}`}>{statusDisplay.text}</span>
+                                                    </div>
+                                                    <div className="font-mono text-xs text-white">#{build.id.substring(0, 8)}</div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3 text-xs">
+                                                    <div>
+                                                        <div className="text-zinc-500">Branch</div>
+                                                        <div className="flex items-center gap-1 text-zinc-300">
+                                                            <GitBranch size={12} className="text-zinc-500" />
+                                                            <span className="truncate">{build.branch}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-zinc-500">Commit</div>
+                                                        <div className="font-mono text-zinc-400">{build.commitHash?.substring(0, 7) || 'N/A'}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-zinc-500">Started</div>
+                                                        <div className="truncate text-zinc-400">{build.startTime}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-zinc-500">Duration</div>
+                                                        <div className="text-zinc-400">
+                                                            {build.duration ||
+                                                                (isBuilding ? (
+                                                                    <span className="flex items-center gap-1 text-orange-400">
+                                                                        <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-orange-400" />
+                                                                        In progress
+                                                                    </span>
+                                                                ) : (
+                                                                    '-'
+                                                                ))}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="mt-3 flex gap-2">
+                                                    <button
+                                                        onClick={() => {
+                                                            setSelectedBuild(build)
+                                                            setShowBuildLogs(true)
+                                                        }}
+                                                        className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
+                                                    >
+                                                        <Eye size={14} />
+                                                        View Logs
+                                                    </button>
+                                                    <button onClick={() => handleDeleteBuild(build.id)} className="flex items-center gap-2 rounded-lg border border-red-700 bg-red-900/20 px-3 py-2 text-xs font-medium text-red-400 transition-colors hover:bg-red-900/40">
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+
+                                {/* Desktop Table View */}
+                                <div className="hidden overflow-hidden rounded-lg border border-zinc-800 bg-[#1b1b1b] sm:block">
                                     <table className="w-full">
                                         <thead className="border-b border-zinc-800 bg-zinc-900/50">
                                             <tr>

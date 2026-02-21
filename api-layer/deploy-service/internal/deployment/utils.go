@@ -193,6 +193,22 @@ func (o *DeploymentOrchestrator) DetectAppPort(ctx context.Context, job Deployme
 	if err == nil && metadataJSON.Valid {
 		var metadata map[string]interface{}
 		if err := json.Unmarshal([]byte(metadataJSON.String), &metadata); err == nil {
+			// Try frameworks array first
+			if frameworks, ok := metadata["frameworks"].([]interface{}); ok && len(frameworks) > 0 {
+				for _, fw := range frameworks {
+					if fwMap, ok := fw.(map[string]interface{}); ok {
+						if port, ok := fwMap["port"].(float64); ok && port > 0 {
+							log.Printf("📍 Using port from build metadata frameworks: %d", int(port))
+							return int(port)
+						}
+						if port, ok := fwMap["port"].(int); ok && port > 0 {
+							log.Printf("📍 Using port from build metadata frameworks: %d", port)
+							return port
+						}
+					}
+				}
+			}
+			// Try architecture.port
 			if architecture, ok := metadata["architecture"].(map[string]interface{}); ok {
 				if port, ok := architecture["port"].(float64); ok && port > 0 {
 					log.Printf("📍 Using port from build metadata: %d", int(port))
@@ -273,6 +289,9 @@ func (o *DeploymentOrchestrator) getDefaultPortForFramework(framework string) in
 		// Other
 		"dotnet": 5000,
 		"aspnet": 5000,
+
+		// Static sites
+		"static html/css": 80,
 	}
 
 	if port, exists := frameworkPorts[framework]; exists {

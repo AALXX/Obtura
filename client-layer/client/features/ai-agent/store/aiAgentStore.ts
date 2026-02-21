@@ -335,6 +335,7 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     claude_api_key: '',
                     gemini_api_key: '',
                 },
+                
                 isSaving: false 
             })
         } catch (error: any) {

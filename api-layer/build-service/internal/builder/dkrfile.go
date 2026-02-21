@@ -10,18 +10,32 @@ import (
 
 func GenerateDockerfile(framework *Framework, projectPath string) (string, error) {
 	switch {
-	case framework.Name == "Next.js":
+	case framework.Name == "Next.js" || framework.Name == "Bun (Next.js)":
 		return generateNextJsDockerfile(framework, projectPath)
 	case framework.Name == "Nuxt.js":
 		return generateNuxtDockerfile(framework)
-	case framework.Name == "Express.js":
+	case framework.Name == "Express.js" || framework.Name == "Bun (Express)":
 		return generateExpressDockerfile(framework)
 	case framework.Name == "NestJS":
 		return generateNestJSDockerfile(framework)
-	case strings.HasPrefix(framework.Name, "Vite"):
+	case strings.HasPrefix(framework.Name, "Vite") ||
+		strings.HasPrefix(framework.Name, "Angular") ||
+		strings.HasPrefix(framework.Name, "Solid"):
 		return generateViteDockerfile(framework)
 	case framework.Name == "Create React App":
 		return generateCRADockerfile(framework)
+	case strings.HasPrefix(framework.Name, "Astro"):
+		return generateAstroDockerfile(framework)
+	case framework.Name == "Remix":
+		return generateRemixDockerfile(framework)
+	case strings.HasPrefix(framework.Name, "SvelteKit"):
+		return generateSvelteKitDockerfile(framework)
+	case framework.Name == "SolidStart":
+		return generateSolidStartDockerfile(framework)
+	case framework.Name == "Angular":
+		return generateAngularDockerfile(framework)
+	case framework.Name == "Hono" || framework.Name == "Bun (Hono)":
+		return generateHonoDockerfile(framework)
 	case framework.Name == "Django":
 		return generateDjangoDockerfile(framework)
 	case framework.Name == "Flask":
@@ -32,12 +46,28 @@ func GenerateDockerfile(framework *Framework, projectPath string) (string, error
 		return generateGoDockerfile(framework)
 	case framework.Name == "Laravel":
 		return generateLaravelDockerfile(framework)
+	case framework.Name == "Symfony":
+		return generateSymfonyDockerfile(framework)
 	case framework.Name == "Ruby on Rails":
 		return generateRailsDockerfile(framework)
 	case framework.Name == "Spring Boot":
 		return generateSpringBootDockerfile(framework)
 	case strings.HasPrefix(framework.Name, "Rust"):
 		return generateRustDockerfile(framework)
+	case framework.Name == "Deno":
+		return generateDenoDockerfile(framework)
+	case strings.HasPrefix(framework.Name, "Bun"):
+		return generateBunDockerfile(framework)
+	case strings.HasPrefix(framework.Name, ".NET") ||
+		strings.HasPrefix(framework.Name, "ASP.NET") ||
+		strings.HasPrefix(framework.Name, "Blazor"):
+		return generateDotNetDockerfile(framework)
+	case framework.Name == "Phoenix" || strings.HasPrefix(framework.Name, "Elixir"):
+		return generatePhoenixDockerfile(framework)
+	case framework.Name == "Static HTML/CSS":
+		return generateStaticDockerfile(framework)
+	case framework.IsStatic:
+		return generateStaticDockerfile(framework)
 	default:
 		return generateGenericDockerfile(framework)
 	}
@@ -100,12 +130,12 @@ module.exports = nextConfig
 	} else {
 		// Strategy 2: Find the main config object and add output property
 		// This handles various formats more robustly
-		
+
 		// Look for patterns like:
 		// const nextConfig = { ... }
 		// module.exports = { ... }
 		// export default { ... }
-		
+
 		configPatterns := []string{
 			`(const\s+\w+\s*=\s*\{)(\s*)`,
 			`(module\.exports\s*=\s*\{)(\s*)`,
@@ -129,10 +159,10 @@ module.exports = nextConfig
 				// Check if there's already an export default with a variable
 				exportDefaultPattern := regexp.MustCompile(`export\s+default\s+(\w+)`)
 				matches := exportDefaultPattern.FindStringSubmatch(content)
-				
+
 				if len(matches) > 1 {
 					varName := matches[1]
-					newContent = exportDefaultPattern.ReplaceAllString(content, 
+					newContent = exportDefaultPattern.ReplaceAllString(content,
 						fmt.Sprintf(`export default {
   ...%s,
   output: 'standalone',
@@ -156,7 +186,7 @@ export default {
 			} else {
 				moduleExportsPattern := regexp.MustCompile(`module\.exports\s*=\s*(\w+)`)
 				matches := moduleExportsPattern.FindStringSubmatch(content)
-				
+
 				if len(matches) > 1 {
 					varName := matches[1]
 					newContent = moduleExportsPattern.ReplaceAllString(content,
@@ -197,14 +227,14 @@ func generateNextJsDockerfile(framework *Framework, projectPath string) (string,
 	if err != nil {
 		fmt.Printf("⚠️  Failed to modify Next.js config: %v\n", err)
 	}
-	
+
 	if modified {
 		fmt.Printf("✓ Added standalone output to Next.js config\n")
 	}
 
 	// Check if we should use standalone mode
 	useStandalone := true
-	
+
 	// Verify standalone directory will exist after build
 	standalonePath := filepath.Join(projectPath, ".next", "standalone")
 	_, statErr := os.Stat(standalonePath)
@@ -718,6 +748,528 @@ EXPOSE 8080
 
 CMD ["./app"]
 `, nil
+}
+
+func generateAstroDockerfile(framework *Framework) (string, error) {
+	if framework.Name == "Astro (SSR)" {
+		return `FROM node:20-alpine AS base
+
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build
+
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 astro
+
+COPY --from=builder --chown=astro:nodejs /app/dist ./dist
+COPY --from=builder --chown=astro:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=astro:nodejs /app/package.json ./
+
+USER astro
+
+EXPOSE 4321
+
+ENV HOST=0.0.0.0
+ENV PORT=4321
+
+CMD ["node", "./dist/server/entry.mjs"]
+`, nil
+	}
+
+	return `FROM node:20-alpine AS base
+
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build
+
+# Serve static files with nginx
+FROM nginx:alpine AS runner
+
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+`, nil
+}
+
+func generateRemixDockerfile(framework *Framework) (string, error) {
+	return `FROM node:20-alpine AS base
+
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build
+
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 remix
+
+COPY --from=builder --chown=remix:nodejs /app/build ./build
+COPY --from=builder --chown=remix:nodejs /app/public ./public
+COPY --from=builder --chown=remix:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=remix:nodejs /app/package.json ./
+
+USER remix
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOST=0.0.0.0
+
+CMD ["npm", "start"]
+`, nil
+}
+
+func generateSvelteKitDockerfile(framework *Framework) (string, error) {
+	if framework.Name == "SvelteKit (Static)" {
+		return `FROM node:20-alpine AS base
+
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build
+
+FROM nginx:alpine AS runner
+
+COPY --from=builder /app/build /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+`, nil
+	}
+
+	return `FROM node:20-alpine AS base
+
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build
+
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 sveltekit
+
+COPY --from=builder --chown=sveltekit:nodejs /app/build ./build
+COPY --from=builder --chown=sveltekit:nodejs /app/package.json ./
+
+USER sveltekit
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOST=0.0.0.0
+
+CMD ["node", "build"]
+`, nil
+}
+
+func generateSolidStartDockerfile(framework *Framework) (string, error) {
+	return `FROM node:20-alpine AS base
+
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build
+
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 solid
+
+COPY --from=builder --chown=solid:nodejs /app/.output ./.output
+COPY --from=builder --chown=solid:nodejs /app/package.json ./
+
+USER solid
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOST=0.0.0.0
+
+CMD ["node", ".output/server/index.mjs"]
+`, nil
+}
+
+func generateAngularDockerfile(framework *Framework) (string, error) {
+	return `FROM node:20-alpine AS base
+
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build -- --configuration production
+
+FROM nginx:alpine AS runner
+
+COPY --from=builder /app/dist/browser /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+`, nil
+}
+
+func generateHonoDockerfile(framework *Framework) (string, error) {
+	return `FROM node:20-alpine AS base
+
+FROM base AS deps
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_ENV=production
+RUN npm run build
+
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 hono
+
+COPY --from=builder --chown=hono:nodejs /app/dist ./dist
+COPY --from=builder --chown=hono:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=hono:nodejs /app/package.json ./
+
+USER hono
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOST=0.0.0.0
+
+CMD ["node", "dist/index.js"]
+`, nil
+}
+
+func generateSymfonyDockerfile(framework *Framework) (string, error) {
+	return `FROM php:8.2-fpm-alpine AS base
+
+# Install system dependencies
+RUN apk add --no-cache \
+    postgresql-dev \
+    zip \
+    unzip \
+    git \
+    icu-dev
+
+# Install PHP extensions
+RUN docker-php-ext-install pdo pdo_pgsql intl
+
+# Install Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+WORKDIR /var/www
+
+# Copy composer files
+COPY composer.json composer.lock* ./
+RUN composer install --no-dev --no-scripts --no-autoloader
+
+# Copy application
+COPY . .
+
+RUN composer dump-autoload --optimize --no-dev && \
+    php bin/console cache:clear --env=prod
+
+RUN chown -R www-data:www-data /var/www
+
+USER www-data
+
+EXPOSE 8000
+
+CMD ["php", "-S", "0.0.0.0:8000", "-t", "public"]
+`, nil
+}
+
+func generateDenoDockerfile(framework *Framework) (string, error) {
+	return `FROM denoland/deno:alpine AS base
+
+WORKDIR /app
+
+# Cache dependencies
+COPY deno.json* ./
+COPY main.ts mod.ts* ./
+RUN deno cache main.ts 2>/dev/null || true
+
+# Copy application
+COPY . .
+
+# Create non-root user
+RUN addgroup -g 1001 -S deno && \
+    adduser -u 1001 -S deno -G deno && \
+    chown -R deno:deno /app
+
+USER deno
+
+EXPOSE 8000
+
+ENV PORT=8000
+ENV HOST=0.0.0.0
+
+CMD ["run", "--allow-net", "--allow-read", "--allow-env", "main.ts"]
+`, nil
+}
+
+func generateBunDockerfile(framework *Framework) (string, error) {
+	return fmt.Sprintf(`FROM oven/bun:alpine AS base
+
+WORKDIR /app
+
+# Install dependencies
+FROM base AS deps
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile
+
+# Copy source
+FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Production image
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+RUN addgroup -g 1001 -S bun && \
+    adduser -u 1001 -S bun -G bun
+
+COPY --from=builder --chown=bun:bun /app/node_modules ./node_modules
+COPY --from=builder --chown=bun:bun /app/package.json ./
+COPY --from=builder --chown=bun:bun /app/src ./src
+
+USER bun
+
+EXPOSE %d
+
+ENV PORT=%d
+ENV HOST=0.0.0.0
+
+CMD ["bun", "run", "src/index.ts"]
+`, framework.Port, framework.Port), nil
+}
+
+func generateDotNetDockerfile(framework *Framework) (string, error) {
+	if framework.Name == "Blazor WebAssembly" {
+		return `FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copy csproj files
+COPY *.csproj ./
+RUN dotnet restore
+
+# Copy everything else
+COPY . .
+RUN dotnet publish -c Release -o /app/publish
+
+FROM nginx:alpine AS runtime
+COPY --from=build /app/publish/wwwroot /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+`, nil
+	}
+
+	return `FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copy csproj files and restore
+COPY *.csproj ./
+RUN dotnet restore
+
+# Copy everything else and build
+COPY . .
+RUN dotnet publish -c Release -o /app/publish
+
+# Runtime image
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+
+# Create non-root user
+RUN addgroup -g 1001 -S dotnet && \
+    adduser -u 1001 -S dotnet -G dotnet
+
+COPY --from=build /app/publish ./
+RUN chown -R dotnet:dotnet /app
+
+USER dotnet
+
+EXPOSE 8080
+
+ENV ASPNETCORE_URLS=http://+:8080
+ENV ASPNETCORE_ENVIRONMENT=Production
+
+ENTRYPOINT ["dotnet", "app.dll"]
+`, nil
+}
+
+func generatePhoenixDockerfile(framework *Framework) (string, error) {
+	return `FROM elixir:1.16-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache build-base git
+
+WORKDIR /app
+
+# Install hex and rebar
+RUN mix local.hex --force && \
+    mix local.rebar --force
+
+# Copy mix files
+COPY mix.exs mix.lock* ./
+RUN mix deps.get --only prod
+
+# Copy source
+COPY . .
+
+# Build release
+ENV MIX_ENV=prod
+RUN mix compile
+RUN mix release
+
+# Runtime image
+FROM alpine:3.19 AS runtime
+
+RUN apk add --no-cache openssl ncurses-libs
+
+WORKDIR /app
+
+RUN addgroup -g 1001 -S phoenix && \
+    adduser -u 1001 -S phoenix -G phoenix
+
+COPY --from=builder /app/_build/prod/rel ./
+RUN chown -R phoenix:phoenix /app
+
+USER phoenix
+
+EXPOSE 4000
+
+ENV PHX_SERVER=true
+ENV PORT=4000
+
+CMD ["./rel/app_name/bin/app_name", "start"]
+`, nil
+}
+
+func generateStaticDockerfile(framework *Framework) (string, error) {
+	outputDir := framework.OutputDir
+	if outputDir == "" {
+		outputDir = "."
+	}
+
+	return fmt.Sprintf(`FROM nginx:alpine AS runtime
+
+# Copy static files
+COPY %s /usr/share/nginx/html
+
+# Copy nginx config (if exists)
+COPY nginx.conf* /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+`, outputDir), nil
 }
 
 func generateGenericDockerfile(framework *Framework) (string, error) {

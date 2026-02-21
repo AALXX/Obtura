@@ -940,10 +940,10 @@ func (o *DeploymentOrchestrator) createSecureDeploymentContainer(
 		MaskedPaths:   config.MaskedPaths,
 		ReadonlyPaths: config.ReadOnlyPaths,
 		Tmpfs: map[string]string{
-			"/tmp":       "rw,noexec,nosuid,size=200m",
-			"/var/tmp":   "rw,noexec,nosuid,size=200m",
-			"/var/run":   "rw,noexec,nosuid,size=100m",
-			"/var/cache": "rw,noexec,nosuid,size=500m",
+			"/tmp":             "rw,noexec,nosuid,size=200m",
+			"/var/tmp":         "rw,noexec,nosuid,size=200m",
+			"/var/run":         "rw,noexec,nosuid,size=100m",
+			"/var/cache/nginx": "rw,exec,size=500m",
 		},
 		Mounts: o.buildSecureMounts(job, config),
 		LogConfig: container.LogConfig{
