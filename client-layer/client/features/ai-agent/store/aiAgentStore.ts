@@ -2,7 +2,20 @@
 
 import { create } from 'zustand'
 import axios from 'axios'
-import { AIAgentState, AIAgentActions, Conversation, Message, AISettings, DEFAULT_MODELS } from '../types/AIAgentTypes'
+import { 
+    AIAgentState, 
+    AIAgentActions, 
+    Conversation, 
+    Message, 
+    AISettings, 
+    DEFAULT_MODELS,
+    BUILT_IN_AGENTS,
+    AGENT_PRESETS,
+    AgentStrategy,
+    AgentPreset,
+    CustomAgent,
+    AgentDefinition
+} from '../types/AIAgentTypes'
 
 const generateId = () => Math.random().toString(36).substring(2, 15)
 
@@ -16,6 +29,10 @@ const defaultSettings: AISettings = {
     autoAnalyze: true,
     showInsights: true,
     model: DEFAULT_MODELS.openai,
+    agentStrategy: 'single',
+    agentPreset: 'default',
+    selectedAgents: ['architect', 'operator', 'reviewer'],
+    customAgents: [],
 }
 
 const createInitialConversation = () => ({
@@ -134,6 +151,8 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
             const sendConversationId = activeId && activeId.length === 36 ? activeId : undefined
             
             console.log('📤 Sending message - projectId:', projectId, 'conversationId:', sendConversationId)
+
+            const { agentStrategy, agentPreset, selectedAgents, customAgents } = get().settings
             
             const response = await axios.post(
                 `${AI_AGENT_URL}/api/ai/chat`,
@@ -141,6 +160,10 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     message: content,
                     projectId: projectId,
                     conversationId: sendConversationId,
+                    strategy: agentStrategy || 'single',
+                    preset: agentPreset || 'default',
+                    selectedAgents: selectedAgents || [],
+                    customAgents: customAgents || [],
                 },
                 {
                     headers: {
@@ -151,20 +174,50 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                 }
             )
 
-            const respData = response.data as { content?: string; message?: string; conversationId?: string; title?: string }
-            const assistantMessage: Message = {
-                id: generateId(),
-                role: 'assistant',
-                content: respData.content || respData.message || 'No response received',
-                timestamp: new Date()
+            const respData = response.data as {
+                content?: string
+                message?: string
+                conversationId?: string
+                title?: string
+                strategy?: 'single' | 'multi'
+                preset?: 'default' | 'crisis'
+                messages?: Array<{ role?: string; name?: string; content: string; stepIndex?: number }>
             }
+
+            const assistantMessages: Message[] = Array.isArray(respData.messages) && respData.messages.length > 0
+                ? respData.messages.map((m) => ({
+                    id: generateId(),
+                    role: 'assistant' as const,
+                    content: m.content,
+                    timestamp: new Date(),
+                    metadata: {
+                        strategy: respData.strategy,
+                        preset: respData.preset,
+                        agent: {
+                            role: m.role || 'assistant',
+                            name: m.name,
+                        },
+                        data: { stepIndex: m.stepIndex },
+                    }
+                }))
+                : [{
+                    id: generateId(),
+                    role: 'assistant' as const,
+                    content: respData.content || respData.message || 'No response received',
+                    timestamp: new Date(),
+                    metadata: {
+                        strategy: respData.strategy,
+                        preset: respData.preset,
+                        agent: { role: 'assistant', name: 'Obtura AI' },
+                    }
+                }]
 
             set(state => {
                 const activeId = state.activeConversationId || state.conversations[0]?.id
                 const conversation = state.conversations.find(c => c.id === activeId)
                 if (!conversation) return state
 
-                const messages = [...conversation.messages, assistantMessage]
+                const messages = [...conversation.messages, ...assistantMessages]
                 // Use title from backend if available, otherwise generate from first message
                 const title = respData.title || (conversation.title === 'New Conversation' && messages.length === 3
                     ? content.slice(0, 30) + (content.length > 30 ? '...' : '')
@@ -291,42 +344,46 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     ? settings.claude_api_key
                     : settings.gemini_api_key
 
-            if (!apiKey) {
-                console.log('No API key provided, only updating preferences')
-                set({ 
-                    settings: {
-                        ...settings,
-                        openai_api_key: '',
-                        claude_api_key: '',
-                        gemini_api_key: '',
-                    },
-                    isSaving: false 
-                })
-                return
-            }
+            if (apiKey) {
+                const defaultModel = DEFAULT_MODELS[mappedProvider] || DEFAULT_MODELS.openai
+                const selectedModel = settings.model || defaultModel
 
-            const defaultModel = DEFAULT_MODELS[mappedProvider] || DEFAULT_MODELS.openai
-            const selectedModel = settings.model || defaultModel
-
-            console.log('Saving settings to backend - provider:', mappedProvider, 'model:', selectedModel)
-            
-            await axios.post(
-                `${AI_AGENT_URL}/api/providers/configs`,
-                {
-                    projectId,
-                    accessToken,
-                    input: {
+                console.log('Saving settings to backend - provider:', mappedProvider, 'model:', selectedModel)
+                
+                await axios.post(
+                    `${AI_AGENT_URL}/api/providers/configs`,
+                    {
+                        projectId,
+                        accessToken,
                         provider: mappedProvider,
                         providerName: `${settings.defaultProvider} Key`,
                         apiKey: apiKey,
                         model: selectedModel,
+                    },
+                    {
+                        headers: { 'Content-Type': 'application/json' },
+                        timeout: 10000,
                     }
-                },
-                {
-                    headers: { 'Content-Type': 'application/json' },
-                    timeout: 10000,
-                }
-            )
+                )
+            }
+
+            if (settings.agentStrategy !== 'single') {
+                await axios.post(
+                    `${AI_AGENT_URL}/api/agent/preferences`,
+                    {
+                        projectId,
+                        accessToken,
+                        strategy: settings.agentStrategy,
+                        preset: settings.agentPreset,
+                        selectedAgents: settings.selectedAgents,
+                        customAgents: settings.customAgents,
+                    },
+                    {
+                        headers: { 'Content-Type': 'application/json' },
+                        timeout: 10000,
+                    }
+                )
+            }
 
             set({ 
                 settings: {
@@ -398,6 +455,50 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                 
                 console.log('✅ Settings updated:', get().settings)
             }
+
+            try {
+                const prefsResponse = await axios.get<{
+                    strategy?: string
+                    preset?: string
+                    selectedAgents?: string[]
+                    customAgents?: Array<{
+                        id: string
+                        role: string
+                        name: string
+                        description: string
+                        icon: string
+                        systemPrompt: string
+                        maxTokens: number
+                        temperature: number
+                        enabled: boolean
+                        order: number
+                    }>
+                }>(
+                    `${AI_AGENT_URL}/api/agent/preferences?projectId=${projectId}`,
+                    { timeout: 5000 }
+                )
+
+                const prefs = prefsResponse.data
+                if (prefs && (prefs.strategy || prefs.preset)) {
+                    set(state => ({
+                        settings: {
+                            ...state.settings,
+                            agentStrategy: (prefs.strategy as AgentStrategy) || 'single',
+                            agentPreset: (prefs.preset as AgentPreset) || 'default',
+                            selectedAgents: prefs.selectedAgents || ['architect', 'operator', 'reviewer'],
+                            customAgents: prefs.customAgents?.map(a => ({
+                                ...a,
+                                isCustom: true,
+                                createdAt: new Date(),
+                                updatedAt: new Date(),
+                            })) || [],
+                        }
+                    }))
+                    console.log('✅ Agent preferences loaded:', prefs)
+                }
+            } catch (prefsError) {
+                console.log('No agent preferences found, using defaults')
+            }
         } catch (error) {
             console.error('Failed to load AI settings from backend:', error)
         }
@@ -453,12 +554,24 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                             return {
                                 id: conv.id,
                                 title: conv.title || 'New Conversation',
-                                messages: msgResponse.data.messages?.map((m: any) => ({
-                                    id: m.id,
-                                    role: m.role as 'user' | 'assistant',
-                                    content: m.content,
-                                    timestamp: new Date(m.createdAt)
-                                })) || [],
+                                messages: msgResponse.data.messages?.map((m: any) => {
+                                    const ctx = m.context && typeof m.context === 'object' ? m.context : undefined
+                                    const agent = ctx?.agent && typeof ctx.agent === 'object' ? ctx.agent : undefined
+                                    return {
+                                        id: m.id,
+                                        role: m.role as 'user' | 'assistant',
+                                        content: m.content,
+                                        timestamp: new Date(m.createdAt),
+                                        metadata: {
+                                            strategy: ctx?.strategy,
+                                            preset: ctx?.preset,
+                                            agent: agent
+                                                ? { role: agent.role, name: agent.name }
+                                                : undefined,
+                                            data: ctx,
+                                        },
+                                    }
+                                }) || [],
                                 createdAt: new Date(conv.createdAt),
                                 updatedAt: new Date(conv.updatedAt)
                             }
@@ -486,5 +599,92 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
         } catch (error) {
             console.error('Failed to load conversations:', error)
         }
+    },
+
+    setAgentStrategy: (strategy: AgentStrategy) => {
+        set(state => ({
+            settings: {
+                ...state.settings,
+                agentStrategy: strategy,
+            }
+        }))
+    },
+
+    setAgentPreset: (preset: AgentPreset) => {
+        const presetAgents = AGENT_PRESETS[preset] || []
+        set(state => ({
+            settings: {
+                ...state.settings,
+                agentPreset: preset,
+                selectedAgents: preset === 'custom' 
+                    ? state.settings.selectedAgents 
+                    : presetAgents,
+            }
+        }))
+    },
+
+    toggleAgent: (agentId: string) => {
+        set(state => {
+            const currentAgents = state.settings.selectedAgents
+            const isSelected = currentAgents.includes(agentId)
+            
+            let newSelectedAgents: string[]
+            if (isSelected) {
+                newSelectedAgents = currentAgents.filter(id => id !== agentId)
+            } else {
+                newSelectedAgents = [...currentAgents, agentId]
+            }
+
+            return {
+                settings: {
+                    ...state.settings,
+                    selectedAgents: newSelectedAgents,
+                    agentPreset: newSelectedAgents.length > 0 && !AGENT_PRESETS[state.settings.agentPreset]?.includes(agentId)
+                        ? 'custom'
+                        : state.settings.agentPreset,
+                }
+            }
+        })
+    },
+
+    addCustomAgent: (agent: Omit<CustomAgent, 'isCustom' | 'createdAt' | 'updatedAt'>) => {
+        const newAgent: CustomAgent = {
+            ...agent,
+            isCustom: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        }
+        
+        set(state => ({
+            settings: {
+                ...state.settings,
+                customAgents: [...state.settings.customAgents, newAgent],
+                selectedAgents: [...state.settings.selectedAgents, agent.id],
+                agentPreset: 'custom',
+            }
+        }))
+    },
+
+    removeCustomAgent: (agentId: string) => {
+        set(state => ({
+            settings: {
+                ...state.settings,
+                customAgents: state.settings.customAgents.filter(a => a.id !== agentId),
+                selectedAgents: state.settings.selectedAgents.filter(id => id !== agentId),
+            }
+        }))
+    },
+
+    updateCustomAgent: (agentId: string, updates: Partial<CustomAgent>) => {
+        set(state => ({
+            settings: {
+                ...state.settings,
+                customAgents: state.settings.customAgents.map(a => 
+                    a.id === agentId 
+                        ? { ...a, ...updates, updatedAt: new Date() }
+                        : a
+                ),
+            }
+        }))
     },
 }))

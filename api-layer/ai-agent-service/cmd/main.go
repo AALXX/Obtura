@@ -14,6 +14,7 @@ import (
 	"ai-agent-service/internal/analyzer"
 	"ai-agent-service/internal/clients"
 	"ai-agent-service/internal/llm"
+	"ai-agent-service/internal/orchestrator"
 	"ai-agent-service/internal/storage"
 	"ai-agent-service/internal/worker"
 	"ai-agent-service/pkg"
@@ -223,10 +224,25 @@ func main() {
 
 	r.POST("/api/ai/chat", func(c *gin.Context) {
 		var req struct {
-			Message        string `json:"message"`
-			ProjectID      string `json:"projectId"`
-			ConversationID string `json:"conversationId"`
-			Title          string `json:"title"`
+			Message        string   `json:"message"`
+			ProjectID      string   `json:"projectId"`
+			ConversationID string   `json:"conversationId"`
+			Title          string   `json:"title"`
+			Strategy       string   `json:"strategy"` // single | multi | collaborative
+			Preset         string   `json:"preset"`   // default | crisis | security | optimize | custom
+			SelectedAgents []string `json:"selectedAgents"`
+			CustomAgents   []struct {
+				ID           string  `json:"id"`
+				Role         string  `json:"role"`
+				Name         string  `json:"name"`
+				Description  string  `json:"description"`
+				Icon         string  `json:"icon"`
+				SystemPrompt string  `json:"systemPrompt"`
+				MaxTokens    int     `json:"maxTokens"`
+				Temperature  float64 `json:"temperature"`
+				Enabled      bool    `json:"enabled"`
+				Order        int     `json:"order"`
+			} `json:"customAgents"`
 		}
 
 		if err := c.BindJSON(&req); err != nil {
@@ -297,7 +313,10 @@ func main() {
 		}
 
 		// Save user message
-		_, err = conversationStore.AddMessage(conv.ID, "user", req.Message, nil, nil)
+		_, err = conversationStore.AddMessage(conv.ID, "user", req.Message, map[string]interface{}{
+			"strategy": req.Strategy,
+			"preset":   req.Preset,
+		}, nil)
 		if err != nil {
 			log.Printf("❌ Failed to save user message: %v", err)
 			c.JSON(500, gin.H{"error": "Failed to save message"})
@@ -334,31 +353,48 @@ func main() {
 			log.Printf("⚠️ Failed to get conversation history: %v", err)
 		}
 
-		messages := []llm.Message{
-			{Role: "system", Content: aiAgent.GetSystemPrompt()},
-		}
 		// Add history (last 10 messages to keep context manageable)
+		historyMessages := make([]llm.Message, 0, 12)
 		if len(history) > 0 {
 			startIdx := 0
 			if len(history) > 10 {
 				startIdx = len(history) - 10
 			}
 			for _, msg := range history[startIdx:] {
-				messages = append(messages, llm.Message{Role: msg.Role, Content: msg.Content})
+				// Do not include system messages from the DB; we control system prompts explicitly.
+				if msg.Role == "system" {
+					continue
+				}
+				historyMessages = append(historyMessages, llm.Message{Role: msg.Role, Content: msg.Content})
 			}
 		}
-		// Add current message
-		messages = append(messages, llm.Message{Role: "user", Content: req.Message})
 
-		completeReq := llm.CompletionRequest{
-			Messages:    messages,
-			MaxTokens:   2000,
-			Temperature: 0.7,
-			Model:       config.Model,
-		}
-
-		resp, err := provider.Complete(c.Request.Context(), completeReq)
-		log.Printf("DEBUG: AI call completed, err=%v", err)
+		runOut, err := orchestrator.Run(c.Request.Context(), orchestrator.MultiAgentInput{
+			Provider:          provider,
+			Model:             config.Model,
+			BaseSystemPrompt:  aiAgent.GetSystemPrompt(),
+			ConversationSlice: historyMessages,
+			UserMessage:       req.Message,
+			StrategyRaw:       req.Strategy,
+			PresetRaw:         req.Preset,
+			SelectedAgents:    req.SelectedAgents,
+			CustomAgents: func() []orchestrator.AgentSpec {
+				agents := make([]orchestrator.AgentSpec, len(req.CustomAgents))
+				for i, a := range req.CustomAgents {
+					agents[i] = orchestrator.AgentSpec{
+						Role:        orchestrator.AgentRole(a.Role),
+						Name:        a.Name,
+						SystemNotes: a.SystemPrompt,
+						MaxTokens:   a.MaxTokens,
+						Temperature: a.Temperature,
+						Enabled:     a.Enabled,
+						Order:       a.Order,
+					}
+				}
+				return agents
+			}(),
+		})
+		log.Printf("DEBUG: AI run completed, err=%v", err)
 
 		// Update title for new conversations (whether AI succeeds or fails)
 		if isNewConversation {
@@ -396,16 +432,31 @@ func main() {
 			return
 		}
 
-		// Save assistant response
-		_, msgErr := conversationStore.AddMessage(conv.ID, "assistant", resp.Content, nil, nil)
-		if msgErr != nil {
-			log.Printf("❌ Failed to save assistant message: %v", msgErr)
+		// Save assistant responses (single or multi). For multi, each role gets its own message.
+		var lastContent string
+		for _, m := range runOut.Messages {
+			lastContent = m.Content
+			_, msgErr := conversationStore.AddMessage(conv.ID, "assistant", m.Content, map[string]interface{}{
+				"strategy": runOut.Strategy,
+				"preset":   runOut.Preset,
+				"agent": map[string]interface{}{
+					"role": m.Role,
+					"name": m.Name,
+				},
+				"stepIndex": m.StepIndex,
+			}, nil)
+			if msgErr != nil {
+				log.Printf("❌ Failed to save assistant message: %v", msgErr)
+			}
 		}
 
 		c.JSON(200, gin.H{
-			"content":        resp.Content,
+			"content":        lastContent, // backward compatibility
 			"conversationId": conv.ID,
 			"title":          conv.Title,
+			"strategy":       runOut.Strategy,
+			"preset":         runOut.Preset,
+			"messages":       runOut.Messages,
 		})
 	})
 
@@ -640,6 +691,99 @@ func main() {
 		}
 
 		c.JSON(200, gin.H{"message": "Provider config deleted"})
+	})
+
+	r.POST("/api/agent/preferences", func(c *gin.Context) {
+		var req struct {
+			ProjectID      string   `json:"projectId"`
+			AccessToken    string   `json:"accessToken"`
+			Strategy       string   `json:"strategy"`
+			Preset         string   `json:"preset"`
+			SelectedAgents []string `json:"selectedAgents"`
+			CustomAgents   []struct {
+				ID           string  `json:"id"`
+				Role         string  `json:"role"`
+				Name         string  `json:"name"`
+				Description  string  `json:"description"`
+				Icon         string  `json:"icon"`
+				SystemPrompt string  `json:"systemPrompt"`
+				MaxTokens    int     `json:"maxTokens"`
+				Temperature  float64 `json:"temperature"`
+				Enabled      bool    `json:"enabled"`
+				Order        int     `json:"order"`
+			} `json:"customAgents"`
+		}
+
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request body"})
+			return
+		}
+
+		if req.ProjectID == "" {
+			c.JSON(400, gin.H{"error": "projectId is required"})
+			return
+		}
+
+		log.Printf("📝 Saving agent preferences - strategy: %s, preset: %s, agents: %v",
+			req.Strategy, req.Preset, req.SelectedAgents)
+
+		agentStore, err := storage.NewAgentPreferencesStore(db.DB)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to initialize preferences store"})
+			return
+		}
+
+		err = agentStore.SaveAgentPreferences(req.ProjectID, storage.AgentPreferences{
+			Strategy:       req.Strategy,
+			Preset:         req.Preset,
+			SelectedAgents: req.SelectedAgents,
+			CustomAgents: func() []storage.CustomAgentSpec {
+				agents := make([]storage.CustomAgentSpec, len(req.CustomAgents))
+				for i, a := range req.CustomAgents {
+					agents[i] = storage.CustomAgentSpec{
+						ID:           a.ID,
+						Role:         a.Role,
+						Name:         a.Name,
+						Description:  a.Description,
+						Icon:         a.Icon,
+						SystemPrompt: a.SystemPrompt,
+						MaxTokens:    a.MaxTokens,
+						Temperature:  a.Temperature,
+						Enabled:      a.Enabled,
+						Order:        a.Order,
+					}
+				}
+				return agents
+			}(),
+		})
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to save preferences: " + err.Error()})
+			return
+		}
+
+		c.JSON(200, gin.H{"message": "Agent preferences saved successfully"})
+	})
+
+	r.GET("/api/agent/preferences", func(c *gin.Context) {
+		projectID := c.Query("projectId")
+		if projectID == "" {
+			c.JSON(400, gin.H{"error": "projectId is required"})
+			return
+		}
+
+		agentStore, err := storage.NewAgentPreferencesStore(db.DB)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to initialize preferences store"})
+			return
+		}
+
+		prefs, err := agentStore.GetAgentPreferences(projectID)
+		if err != nil {
+			c.JSON(404, gin.H{"error": "No preferences found"})
+			return
+		}
+
+		c.JSON(200, prefs)
 	})
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())

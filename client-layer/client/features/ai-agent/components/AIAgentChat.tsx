@@ -51,6 +51,9 @@ export function AIAgentChat() {
         activeConversationId,
         isOpen,
         isLoading,
+        settings,
+        initializeSettings,
+        updateSettings,
         closeChat,
         sendMessage,
         createNewConversation,
@@ -77,6 +80,35 @@ export function AIAgentChat() {
             inputRef.current.focus()
         }
     }, [isOpen])
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem('obtura.ai.agentPrefs')
+            if (!raw) return
+            const parsed = JSON.parse(raw) as { agentStrategy?: 'single' | 'multi'; agentPreset?: 'default' | 'crisis' }
+            if (parsed?.agentStrategy || parsed?.agentPreset) {
+                initializeSettings({
+                    agentStrategy: parsed.agentStrategy,
+                    agentPreset: parsed.agentPreset,
+                })
+            }
+        } catch {
+            // ignore
+        }
+        // Only run once on mount.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('obtura.ai.agentPrefs', JSON.stringify({
+                agentStrategy: settings.agentStrategy || 'single',
+                agentPreset: settings.agentPreset || 'default',
+            }))
+        } catch {
+            // ignore
+        }
+    }, [settings.agentStrategy, settings.agentPreset])
 
     const handleSend = async () => {
         if (!inputValue.trim() || isLoading) return
@@ -247,6 +279,18 @@ export function AIAgentChat() {
                                                 : 'border border-zinc-800 bg-[#1b1b1b] text-neutral-200'
                                         }`}
                                     >
+                                        {message.role === 'assistant' && message.metadata?.agent?.role && (
+                                            <div className="mb-2 flex items-center gap-2">
+                                                <span className="rounded-full border border-zinc-700 bg-[#0a0a0a] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-neutral-300">
+                                                    {message.metadata.agent.name || message.metadata.agent.role}
+                                                </span>
+                                                {message.metadata.preset === 'crisis' && (
+                                                    <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-red-300">
+                                                        crisis
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
                                         <div className="whitespace-pre-wrap">
                                             {message.content.split('\n').map((line, i) => (
                                                 <span key={i}>
@@ -287,6 +331,43 @@ export function AIAgentChat() {
                     </div>
 
                     <div className="border-t border-zinc-800 bg-[#1b1b1b] p-4">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+                                <span className="inline-flex items-center gap-1 rounded-full border border-zinc-700 bg-[#0a0a0a] px-2 py-0.5 uppercase tracking-wider text-neutral-200">
+                                    <Bot size={12} className="text-orange-400" />
+                                    {settings.agentStrategy === 'multi' ? 'Multi agent' : 'Single agent'}
+                                </span>
+                                {settings.agentStrategy === 'multi' && (
+                                    <span className="text-[10px] text-neutral-500">
+                                        {settings.agentPreset === 'crisis' ? 'Crisis team' : 'Default team'}
+                                    </span>
+                                )}
+                            </div>
+                            <div className="flex gap-2">
+                                <select
+                                    value={settings.agentStrategy || 'single'}
+                                    onChange={e =>
+                                        updateSettings({ agentStrategy: e.target.value as 'single' | 'multi' })
+                                    }
+                                    className="rounded-lg border border-zinc-700 bg-[#0a0a0a] px-2 py-1 text-[11px] text-white outline-none focus:border-orange-500"
+                                >
+                                    <option value="single">Single</option>
+                                    <option value="multi">Multi</option>
+                                </select>
+                                <select
+                                    value={settings.agentPreset || 'default'}
+                                    onChange={e =>
+                                        updateSettings({ agentPreset: e.target.value as 'default' | 'crisis' })
+                                    }
+                                    disabled={settings.agentStrategy !== 'multi'}
+                                    className="rounded-lg border border-zinc-700 bg-[#0a0a0a] px-2 py-1 text-[11px] text-white outline-none focus:border-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <option value="default">Default</option>
+                                    <option value="crisis">Crisis</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <div className="flex items-end gap-2 rounded-xl border border-zinc-700 bg-[#0a0a0a] p-2">
                             <textarea
                                 ref={inputRef}
