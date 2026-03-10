@@ -136,7 +136,19 @@ func PushImage(ctx context.Context, imageTag string) error {
 			return fmt.Errorf("failed to initialize Docker builder: %w", err)
 		}
 	}
-	return defaultBuilder.PushImage(ctx, imageTag)
+	return defaultBuilder.PushImage(ctx, imageTag, nil)
+}
+
+// PushImageWithProgress pushes an image and calls progressFn for each progress line.
+func PushImageWithProgress(ctx context.Context, imageTag string, progressFn func(string)) error {
+	if defaultBuilder == nil {
+		var err error
+		defaultBuilder, err = NewBuilder()
+		if err != nil {
+			return fmt.Errorf("failed to initialize Docker builder: %w", err)
+		}
+	}
+	return defaultBuilder.PushImage(ctx, imageTag, progressFn)
 }
 
 func (b *Builder) BuildImage(ctx context.Context, projectPath string, imageTag string) (io.ReadCloser, error) {
@@ -164,7 +176,8 @@ func (b *Builder) BuildImage(ctx context.Context, projectPath string, imageTag s
 	return resp.Body, nil
 }
 
-func (b *Builder) PushImage(ctx context.Context, imageTag string) error {
+// PushImage pushes the image. progressFn (optional) is called for each progress line.
+func (b *Builder) PushImage(ctx context.Context, imageTag string, progressFn func(string)) error {
 	log.Printf("📤 Pushing Docker image: %s", imageTag)
 
 	authConfig := registry.AuthConfig{
@@ -185,13 +198,11 @@ func (b *Builder) PushImage(ctx context.Context, imageTag string) error {
 	}
 	defer resp.Close()
 
-	// Create a channel to signal when streaming is done
 	done := make(chan error, 1)
 	go func() {
-		done <- b.streamPushProgress(resp)
+		done <- b.streamPushProgress(resp, progressFn)
 	}()
 
-	// Wait for either context cancellation or push completion with timeout
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("push cancelled: %w", ctx.Err())
@@ -207,9 +218,16 @@ func (b *Builder) PushImage(ctx context.Context, imageTag string) error {
 	return nil
 }
 
-// streamPushProgress reads and logs push progress, returns when stream closes
-func (b *Builder) streamPushProgress(resp io.ReadCloser) error {
+// streamPushProgress reads push progress from the Docker daemon response stream.
+// Each distinct status line is passed to progressFn (if provided) so the caller
+// can forward it to SSE / logs.  Layer progress bars (which churn at high frequency)
+// are deduplicated so we only emit a line when the status text changes.
+func (b *Builder) streamPushProgress(resp io.ReadCloser, progressFn func(string)) error {
 	decoder := json.NewDecoder(resp)
+
+	// Track last status per layer to avoid spamming "Pushing 1.2MB/10MB" every 100ms
+	lastStatus := make(map[string]string) // id → last status string emitted
+
 	for {
 		var msg map[string]interface{}
 		if err := decoder.Decode(&msg); err != nil {
@@ -219,18 +237,44 @@ func (b *Builder) streamPushProgress(resp io.ReadCloser) error {
 			return err
 		}
 
-		// Log progress updates
-		if status, ok := msg["status"].(string); ok && status != "" {
-			if progress, ok := msg["progress"].(string); ok && progress != "" {
-				log.Printf("  → %s: %s", status, progress)
-			} else {
-				log.Printf("  → %s", status)
+		// Check for errors first
+		if errMsg, ok := msg["error"].(string); ok && errMsg != "" {
+			if progressFn != nil {
+				progressFn("❌ Push error: " + errMsg)
 			}
+			return fmt.Errorf("push error: %s", errMsg)
 		}
 
-		// Check for errors
-		if errMsg, ok := msg["error"].(string); ok && errMsg != "" {
-			return fmt.Errorf("push error: %s", errMsg)
+		status, _ := msg["status"].(string)
+		if status == "" {
+			continue
+		}
+
+		id, _ := msg["id"].(string)
+		progress, _ := msg["progress"].(string)
+
+		var line string
+		if id != "" {
+			if progress != "" {
+				// High-frequency progress bar — only emit when status text changes per layer
+				key := id + ":" + status
+				if lastStatus[id] == key {
+					log.Printf("  [push] %s %s %s", id, status, progress)
+					continue // skip duplicate progress spam
+				}
+				lastStatus[id] = key
+				line = fmt.Sprintf("  [push] %s: %s %s", id, status, progress)
+			} else {
+				line = fmt.Sprintf("  [push] %s: %s", id, status)
+				delete(lastStatus, id) // layer done, reset tracking
+			}
+		} else {
+			line = fmt.Sprintf("  [push] %s", status)
+		}
+
+		log.Print(line)
+		if progressFn != nil {
+			progressFn(line)
 		}
 	}
 }

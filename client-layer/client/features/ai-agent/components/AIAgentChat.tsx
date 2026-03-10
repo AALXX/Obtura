@@ -419,10 +419,17 @@ function AISettingsModal({ onClose }: { onClose: () => void }) {
 
     const handleSave = async () => {
         setSaveStatus('saving')
-        await saveSettings(localSettings)
-        setSaveStatus('success')
-        setEditingKey({})
-        setTimeout(() => setSaveStatus('idle'), 2000)
+        try {
+            await saveSettings(localSettings)
+            setSaveStatus('success')
+            setEditingKey({})
+            setTimeout(() => setSaveStatus('idle'), 2000)
+        } catch (error: any) {
+            const errMsg = error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Unknown error'
+            console.error('handleSave failed:', errMsg)
+            setSaveStatus('error')
+            setTimeout(() => setSaveStatus('idle'), 3000)
+        }
     }
 
     const toggleShowKey = (key: string) => {

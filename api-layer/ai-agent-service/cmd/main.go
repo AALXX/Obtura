@@ -24,8 +24,8 @@ import (
 
 var defaultModels = map[string]string{
 	"openai":    "gpt-4o",
-	"anthropic": "claude-sonnet-4-20250514",
-	"gemini":    "gemini-1.5-pro",
+	"anthropic": "claude-opus-4-6",
+	"gemini":    "gemini-2.5-flash-preview",
 }
 
 func getDefaultModel(provider string) string {
@@ -38,17 +38,67 @@ func getDefaultModel(provider string) string {
 func isValidModelForProvider(provider, model string) bool {
 	validModels := map[string][]string{
 		"openai": {
-			"gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
-			"gpt-4o-mini", "o1-preview", "o1-mini",
+			// GPT-4.5 series (latest reasoning)
+			"gpt-4.5-preview", "gpt-4.5-preview-2025-02-27",
+			// GPT-4o series (flagship multimodal)
+			"gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",
+			"gpt-4o-mini", "gpt-4o-mini-2024-07-18",
+			// o1 series (reasoning)
+			"o1", "o1-2024-12-17", "o1-preview", "o1-preview-2024-09-12",
+			"o1-mini", "o1-mini-2024-09-12",
+			// o3 series (latest reasoning)
+			"o3-mini", "o3-mini-2025-01-31",
+			// GPT-4 Turbo & GPT-4
+			"gpt-4-turbo", "gpt-4-turbo-2024-04-09", "gpt-4-turbo-preview",
+			"gpt-4", "gpt-4-0613", "gpt-4-0314",
+			"gpt-4-32k", "gpt-4-32k-0613", "gpt-4-32k-0314",
+			// GPT-3.5 Turbo
+			"gpt-3.5-turbo", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106",
+			"gpt-3.5-turbo-16k", "gpt-3.5-turbo-16k-0613",
 		},
 		"anthropic": {
-			"claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022",
-			"claude-3-opus-20240229", "claude-3-haiku-20240307",
-			"claude-3-5-haiku-20241022", "claude-3-sonnet-20240229",
+			// Claude 4.6 series (latest flagship, Aug 2025)
+			"claude-opus-4-6", "claude-opus-4-6-20250807",
+			"claude-sonnet-4-6", "claude-sonnet-4-6-20250807",
+			// Claude 4.5 series (Sep-Nov 2025)
+			"claude-opus-4-5", "claude-opus-4-5-20251101",
+			"claude-sonnet-4-5", "claude-sonnet-4-5-20250929",
+			"claude-haiku-4-5", "claude-haiku-4-5-20251001",
+			// Claude 4.1 series (Aug 2025)
+			"claude-opus-4-1", "claude-opus-4-1-20250805",
+			// Claude 4 series (May 2025)
+			"claude-opus-4", "claude-opus-4-20250514", "claude-opus-4-0",
+			"claude-sonnet-4", "claude-sonnet-4-20250514", "claude-sonnet-4-0",
+			// Claude 3.7 Sonnet (Feb 2025)
+			"claude-3-7-sonnet-20250219", "claude-3-7-sonnet-latest",
+			// Claude 3.5 series (2024)
+			"claude-3-5-sonnet-20241022", "claude-3-5-sonnet-latest",
+			"claude-3-5-haiku-20241022", "claude-3-5-haiku-latest",
+			// Claude 3 Opus (2024)
+			"claude-3-opus-20240229", "claude-3-opus-latest",
+			// Claude 3 Sonnet (2024)
+			"claude-3-sonnet-20240229",
+			// Claude 3 Haiku (2024)
+			"claude-3-haiku-20240307",
 		},
 		"gemini": {
-			"gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro",
+			// Gemini 2.5 series (latest)
+			"gemini-2.5-flash-preview", "gemini-2.5-flash-preview-04-21",
+			"gemini-2.5-pro-preview", "gemini-2.5-pro-preview-03-25",
+			// Gemini 2.0 series
+			"gemini-2.0-flash", "gemini-2.0-flash-001",
+			"gemini-2.0-flash-lite", "gemini-2.0-flash-lite-001",
 			"gemini-2.0-flash-exp",
+			"gemini-2.0-pro-exp-02-05",
+			// Gemini 1.5 series
+			"gemini-1.5-pro", "gemini-1.5-pro-002", "gemini-1.5-pro-001",
+			"gemini-1.5-flash", "gemini-1.5-flash-002", "gemini-1.5-flash-001",
+			"gemini-1.5-flash-8b", "gemini-1.5-flash-8b-001",
+			// Gemini 1.0 series
+			"gemini-1.0-pro", "gemini-1.0-pro-002", "gemini-1.0-pro-001",
+			"gemini-1.0-pro-vision-latest",
+			// Legacy
+			"gemini-pro",
 		},
 	}
 
@@ -139,10 +189,16 @@ func main() {
 	buildClient := clients.NewBuildServiceClient(pkg.GetEnv("BUILD_SERVICE_URL", "http://localhost:5050"))
 	log.Printf("✅ Build service client initialized")
 
+	monitoringClient := clients.NewMonitoringServiceClient(pkg.GetEnv("MONITORING_SERVICE_URL", "http://localhost:5110"))
+	log.Printf("✅ Monitoring service client initialized")
+
+	platformDB := clients.NewPlatformDB(db.DB)
+	log.Printf("✅ Platform DB client initialized")
+
 	buildAnalyzer := analyzer.NewBuildAnalyzer(db.DB, llmManager, minioClient, buildClient)
 	log.Println("✅ Build analyzer initialized")
 
-	aiAgent := agent.NewAgentWithDeps(llmManager, buildAnalyzer, buildClient, minioClient)
+	aiAgent := agent.NewAgentWithDeps(llmManager, buildAnalyzer, platformDB, minioClient, monitoringClient)
 	log.Println("✅ AI Agent initialized")
 
 	rabbitmqURL := pkg.GetEnv("RABBITMQ_URL", "amqp://obtura:obtura123@localhost:5672")
@@ -369,10 +425,15 @@ func main() {
 			}
 		}
 
+		// Enrich context: detect build IDs, list-builds intent, deployment/metrics requests
+		// and fetch real data to inject as a system context block before the LLM call.
+		enrichedContext := aiAgent.EnrichContext(c.Request.Context(), req.Message, req.ProjectID)
+
 		runOut, err := orchestrator.Run(c.Request.Context(), orchestrator.MultiAgentInput{
 			Provider:          provider,
 			Model:             config.Model,
 			BaseSystemPrompt:  aiAgent.GetSystemPrompt(),
+			EnrichedContext:   enrichedContext,
 			ConversationSlice: historyMessages,
 			UserMessage:       req.Message,
 			StrategyRaw:       req.Strategy,
@@ -430,6 +491,18 @@ func main() {
 				"conversationId": conv.ID,
 			})
 			return
+		}
+
+		// Record token usage against the provider config
+		totalTokens := runOut.InputTokens + runOut.OutputTokens
+		if totalTokens > 0 {
+			// Rough cost estimation (input cheaper than output for most providers)
+			costUSD := float64(runOut.InputTokens)*0.000003 + float64(runOut.OutputTokens)*0.000015
+			if err := providerStore.UpdateUsage(config.ID, totalTokens, costUSD); err != nil {
+				log.Printf("⚠️ Failed to update token usage: %v", err)
+			} else {
+				log.Printf("📊 Tokens used: %d input + %d output = %d total (≈$%.6f)", runOut.InputTokens, runOut.OutputTokens, totalTokens, costUSD)
+			}
 		}
 
 		// Save assistant responses (single or multi). For multi, each role gets its own message.

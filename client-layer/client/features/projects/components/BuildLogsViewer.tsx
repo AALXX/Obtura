@@ -48,110 +48,120 @@ const BuildLogsViewer: React.FC<BuildLogsViewerProps> = ({ build, onClose }) => 
         }
     }
 
+    // Safe timestamp parser — never returns "Invalid Date"
+    const parseTimestamp = (ts: string | null | undefined): string => {
+        if (!ts) return new Date().toLocaleTimeString('en-US', { hour12: false })
+        const d = new Date(ts)
+        if (isNaN(d.getTime())) return new Date().toLocaleTimeString('en-US', { hour12: false })
+        return d.toLocaleTimeString('en-US', { hour12: false })
+    }
+
+    // Historical logs: run once per build.id only, not on every status change.
     useEffect(() => {
+        let cancelled = false
+
         const fetchHistoricalLogs = async () => {
             if (hasLoadedHistoricalLogs.current) return
-
             setIsLoading(true)
             try {
-                // Use unified platform logs API
                 const resp = await axios.get<{ events: PlatformLogEvent[]; total: number }>(
                     `${MONITORING_SERVICE_URL}/api/platform-logs/query?resource_type=build&resource_id=${build.id}&limit=1000`
                 )
-
-                if (resp.status === 200 && resp.data.events && resp.data.events.length > 0) {
-                    const transformedLogs = resp.data.events.map((event: PlatformLogEvent) => ({
-                        time: new Date(event.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
+                if (!cancelled && resp.status === 200 && resp.data.events?.length > 0) {
+                    setLogs(resp.data.events.map((event: PlatformLogEvent) => ({
+                        time: parseTimestamp(event.eventTimestamp),
                         message: event.message,
                         type: getLogType(event.severity)
-                    }))
-
-                    setLogs(transformedLogs)
+                    })))
                     hasLoadedHistoricalLogs.current = true
                 }
-            } catch (error) {
-                console.error('Error fetching historical logs:', error)
-                // Fallback to old API if unified API is not available
+            } catch {
+                // Fallback to build-service DB logs endpoint
                 try {
-                    const resp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${build.id}/logs`)
-                    if (resp.status === 200 && resp.data.logs && resp.data.logs.length > 0) {
-                        const transformedLogs = resp.data.logs.map((log: any) => ({
-                            time: new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false }),
+                    const resp = await axios.get<{ logs: any[] }>(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/api/builds/${build.id}/logs`)
+                    if (!cancelled && resp.status === 200 && resp.data.logs?.length > 0) {
+                        setLogs(resp.data.logs.map((log: any) => ({
+                            time: parseTimestamp(log.created_at),
                             message: log.message,
                             type: log.log_type as 'info' | 'success' | 'error' | 'warning'
-                        }))
-                        setLogs(transformedLogs)
+                        })))
                         hasLoadedHistoricalLogs.current = true
                     }
                 } catch (fallbackError) {
-                    console.error('Fallback API also failed:', fallbackError)
+                    console.error('Fallback log fetch failed:', fallbackError)
                 }
             } finally {
-                setIsLoading(false)
+                if (!cancelled) setIsLoading(false)
             }
         }
 
+        fetchHistoricalLogs()
+        return () => { cancelled = true }
+    }, [build.id]) // ← only re-run if the build changes, NOT on status changes
+
+    // Live SSE streaming: only connect while build is active.
+    useEffect(() => {
         const isActive = ['queued', 'cloning', 'installing', 'building', 'running', 'deploying'].includes(currentStatus)
+        if (!isActive) return
 
-        fetchHistoricalLogs().then(() => {
-            if (isActive) {
-                // Use unified platform logs streaming API
-                const eventSource = new EventSource(
-                    `${MONITORING_SERVICE_URL}/api/platform-logs/stream/build/${build.id}`
-                )
-                eventSourceRef.current = eventSource
+        // Try build-service SSE directly (most reliable — it's on the same cluster)
+        const buildServiceURL = process.env.NEXT_PUBLIC_BUILD_SERVICE_URL || 'http://localhost/build-service'
+        const sseURL = `${buildServiceURL}/api/builds/${build.id}/logs/stream`
+        const eventSource = new EventSource(sseURL)
+        eventSourceRef.current = eventSource
 
-                eventSource.addEventListener('connected', e => {
-                    console.log('Connected to build logs stream:', e.data)
-                })
+        eventSource.addEventListener('connected', () => {
+            console.log('Connected to build SSE stream for', build.id)
+        })
 
-                eventSource.addEventListener('log', e => {
-                    try {
-                        const logData: PlatformLogEvent = JSON.parse(e.data)
-                        const newLog = {
-                            time: new Date(logData.eventTimestamp).toLocaleTimeString('en-US', { hour12: false }),
-                            message: logData.message,
-                            type: getLogType(logData.severity)
-                        }
-                        setLogs(prev => [...prev, newLog])
-                        
-                        // Update status based on event subtype
-                        if (logData.eventSubtype === 'build_complete') {
-                            setCurrentStatus(logData.severity === 'error' ? 'failed' : 'success')
-                        }
-                    } catch (error) {
-                        console.error('Error parsing log:', error)
-                    }
-                })
-
-                eventSource.onerror = error => {
-                    console.error('SSE error:', error)
-                    if (eventSource.readyState === EventSource.CLOSED) {
-                        console.log('SSE connection closed')
-                    }
-                    eventSource.close()
-                    
-                    // Fallback to old streaming endpoint
-                    const fallbackEventSource = new EventSource(`${process.env.NEXT_PUBLIC_BUILD_SERVICE_URL}/builds/${build.id}/logs/stream`)
-                    fallbackEventSource.addEventListener('log', e => {
-                        try {
-                            const logData = JSON.parse(e.data)
-                            const newLog = {
-                                time: new Date(logData.timestamp).toLocaleTimeString('en-US', { hour12: false }),
-                                message: logData.message,
-                                type: logData.type
-                            }
-                            setLogs(prev => [...prev, newLog])
-                        } catch (error) {
-                            console.error('Error parsing fallback log:', error)
-                        }
-                    })
-                    fallbackEventSource.addEventListener('complete', () => {
-                        fallbackEventSource.close()
-                    })
-                }
+        eventSource.addEventListener('log', e => {
+            try {
+                const logData = JSON.parse(e.data)
+                setLogs(prev => [...prev, {
+                    time: parseTimestamp(logData.timestamp),
+                    message: logData.message,
+                    type: logData.type ?? 'info'
+                }])
+            } catch (err) {
+                console.error('Error parsing SSE log:', err)
             }
         })
+
+        eventSource.addEventListener('status', e => {
+            try {
+                const statusData = JSON.parse(e.data)
+                if (statusData.status) {
+                    setCurrentStatus(statusData.status)
+                }
+            } catch {}
+        })
+
+        eventSource.addEventListener('complete', () => {
+            eventSource.close()
+        })
+
+        eventSource.onerror = () => {
+            // Connection lost or build-service unreachable — fall back to platform-logs SSE
+            eventSource.close()
+            const fallback = new EventSource(`${MONITORING_SERVICE_URL}/api/platform-logs/stream/build/${build.id}`)
+            eventSourceRef.current = fallback
+
+            fallback.addEventListener('log', e => {
+                try {
+                    const logData: PlatformLogEvent = JSON.parse(e.data)
+                    setLogs(prev => [...prev, {
+                        time: parseTimestamp(logData.eventTimestamp),
+                        message: logData.message,
+                        type: getLogType(logData.severity)
+                    }])
+                    if (logData.eventSubtype === 'build_complete') {
+                        setCurrentStatus(logData.severity === 'error' ? 'failed' : 'success')
+                    }
+                } catch {}
+            })
+
+            fallback.addEventListener('complete', () => fallback.close())
+        }
 
         return () => {
             if (eventSourceRef.current) {

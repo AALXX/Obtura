@@ -608,7 +608,7 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		NetworkMode:  "bridge",
 	}
 
-	w.streamLog(job.BuildID, fmt.Sprintf("Build resources: %d CPU cores, %d GB RAM",
+	w.streamLog(job.BuildID, fmt.Sprintf("Build resources: %.1f CPU cores, %d GB RAM",
 		quotaLimits.CPUCores, quotaLimits.MemoryGB))
 
 	var imageTags []string
@@ -719,7 +719,9 @@ func (w *Worker) handleBuildJob(msg amqp.Delivery) {
 		w.streamLog(job.BuildID, fmt.Sprintf("✅ Image built successfully for %s", framework.Name))
 
 		w.streamLog(job.BuildID, fmt.Sprintf("Pushing image for %s...", framework.Name))
-		if err := w.builder.PushImage(buildCtx, imageTag); err != nil {
+		if err := w.builder.PushImage(buildCtx, imageTag, func(line string) {
+			w.streamLog(job.BuildID, line)
+		}); err != nil {
 			log.Printf("❌ Image push failed for %s: %v", framework.Name, err)
 			w.streamLog(job.BuildID, fmt.Sprintf("Image push failed for %s: %v", framework.Name, err))
 			w.streamStatus(job.BuildID, "failed", "Image push failed")

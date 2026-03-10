@@ -1313,13 +1313,13 @@ const TriggerDeploy = async (req: Request, res: Response) => {
             let subdomain = null;
 
             if (environment === 'production') {
-                domain = `${project.slug}.obtura.app`;
+                domain = `${project.slug}.obtura.dev`;
             } else if (environment === 'staging') {
                 subdomain = 'staging';
-                domain = `staging.${project.slug}.obtura.app`;
+                domain = `staging.${project.slug}.obtura.dev`;
             } else if (environment === 'preview') {
                 subdomain = branch.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-                domain = `${subdomain}.preview.${project.slug}.obtura.app`;
+                domain = `${subdomain}.preview.${project.slug}.obtura.dev`;
             }
 
             const approvalRequired = environment === 'production';

@@ -21,6 +21,7 @@ docker-compose.dev.yml
 /api-layer/deploy-service/tmp/
 /api-layer/monitoring-service/tmp/
 
+/tools
 /Docs   
 
 Jenkinsfile

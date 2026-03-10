@@ -22,6 +22,8 @@ type CompletionResponse struct {
 	Content      string
 	FinishReason string
 	Error        error
+	InputTokens  int
+	OutputTokens int
 }
 
 type StreamResponse struct {
@@ -90,7 +92,7 @@ func NewProviderFromConfig(providerType ProviderType, apiKey, model string) Prov
 	case ProviderClaude, ProviderAnthropic:
 		return NewClaudeProviderWithModel(apiKey, model)
 	case ProviderGemini:
-		return NewMockProvider()
+		return NewGeminiProviderWithModel(apiKey, model)
 	default:
 		return NewMockProvider()
 	}

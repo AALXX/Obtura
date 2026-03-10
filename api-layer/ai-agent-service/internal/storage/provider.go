@@ -4,10 +4,12 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -80,9 +82,15 @@ type ProviderStore struct {
 
 // NewProviderStore creates a new provider store
 func NewProviderStore(db *sql.DB) *ProviderStore {
+	rawKey := os.Getenv("ENV_ENCRYPTION_KEY")
+	if rawKey == "" {
+		rawKey = "this-is-a-32-byte-key-32bytes!!!" // fallback for local dev only
+	}
+	// Hash the key so any length input produces a stable 32-byte AES-256 key
+	keyHash := sha256.Sum256([]byte(rawKey))
 	return &ProviderStore{
 		db:            db,
-		encryptionKey: []byte("this-is-a-32-byte-key-32bytes!!!"), // Must be exactly 32 bytes for AES-256
+		encryptionKey: keyHash[:],
 	}
 }
 
@@ -104,6 +112,15 @@ func (s *ProviderStore) CreateProviderConfig(projectID, userID string, input Pro
 			last_usage_reset_at, tokens_used_this_month, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, 'active', $10, 0.00, $11, 0, $12, $12)
+		ON CONFLICT (project_id, provider_name) DO UPDATE SET
+			api_key_encrypted = EXCLUDED.api_key_encrypted,
+			api_key_iv        = EXCLUDED.api_key_iv,
+			model             = EXCLUDED.model,
+			base_url          = EXCLUDED.base_url,
+			is_active         = true,
+			status            = 'active',
+			status_message    = NULL,
+			updated_at        = EXCLUDED.updated_at
 		RETURNING id, project_id, user_id, provider, provider_name, model, base_url,
 			is_active, status, status_message, monthly_budget_usd, monthly_usage_usd,
 			last_usage_reset_at, tokens_used_this_month, created_at, updated_at
@@ -361,7 +378,7 @@ func (s *ProviderStore) GetActiveProviderForProject(projectID string) (*Provider
 			last_usage_reset_at, tokens_used_this_month, created_at, updated_at
 		FROM ai_provider_configs
 		WHERE project_id = $1 AND is_active = true AND status = 'active' AND deleted_at IS NULL
-		ORDER BY created_at DESC
+		ORDER BY updated_at DESC
 		LIMIT 1
 	`
 

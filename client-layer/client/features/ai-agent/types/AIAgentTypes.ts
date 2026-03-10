@@ -31,28 +31,118 @@ export type AIModel = {
 
 export const AI_MODELS: Record<string, AIModel[]> = {
     openai: [
+        // GPT-4.5 series (latest reasoning)
+        { id: 'gpt-4.5-preview', name: 'GPT-4.5 Preview', provider: 'openai' },
+        { id: 'gpt-4.5-preview-2025-02-27', name: 'GPT-4.5 Preview (Feb 27)', provider: 'openai' },
+        // GPT-4o series (flagship multimodal) - Recommended
         { id: 'gpt-4o', name: 'GPT-4o (Recommended)', provider: 'openai' },
+        { id: 'gpt-4o-2024-11-20', name: 'GPT-4o (Nov 2024)', provider: 'openai' },
+        { id: 'gpt-4o-2024-08-06', name: 'GPT-4o (Aug 2024)', provider: 'openai' },
+        { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai' },
+        { id: 'gpt-4o-mini-2024-07-18', name: 'GPT-4o Mini (Jul 2024)', provider: 'openai' },
+        // o1 series (reasoning)
+        { id: 'o1', name: 'o1', provider: 'openai' },
+        { id: 'o1-2024-12-17', name: 'o1 (Dec 2024)', provider: 'openai' },
+        { id: 'o1-preview', name: 'o1 Preview', provider: 'openai' },
+        { id: 'o1-preview-2024-09-12', name: 'o1 Preview (Sep 2024)', provider: 'openai' },
+        { id: 'o1-mini', name: 'o1 Mini', provider: 'openai' },
+        { id: 'o1-mini-2024-09-12', name: 'o1 Mini (Sep 2024)', provider: 'openai' },
+        // o3 series (latest reasoning)
+        { id: 'o3-mini', name: 'o3 Mini', provider: 'openai' },
+        { id: 'o3-mini-2025-01-31', name: 'o3 Mini (Jan 2025)', provider: 'openai' },
+        // GPT-4 Turbo
         { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', provider: 'openai' },
+        { id: 'gpt-4-turbo-2024-04-09', name: 'GPT-4 Turbo (Apr 2024)', provider: 'openai' },
+        { id: 'gpt-4-turbo-preview', name: 'GPT-4 Turbo Preview', provider: 'openai' },
+        // GPT-4
         { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
+        { id: 'gpt-4-0613', name: 'GPT-4 (Jun 2023)', provider: 'openai' },
+        { id: 'gpt-4-0314', name: 'GPT-4 (Mar 2023)', provider: 'openai' },
+        { id: 'gpt-4-32k', name: 'GPT-4 32K', provider: 'openai' },
+        { id: 'gpt-4-32k-0613', name: 'GPT-4 32K (Jun 2023)', provider: 'openai' },
+        { id: 'gpt-4-32k-0314', name: 'GPT-4 32K (Mar 2023)', provider: 'openai' },
+        // GPT-3.5 Turbo
         { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', provider: 'openai' },
+        { id: 'gpt-3.5-turbo-0125', name: 'GPT-3.5 Turbo (Jan 2024)', provider: 'openai' },
+        { id: 'gpt-3.5-turbo-1106', name: 'GPT-3.5 Turbo (Nov 2023)', provider: 'openai' },
+        { id: 'gpt-3.5-turbo-16k', name: 'GPT-3.5 Turbo 16K', provider: 'openai' },
+        { id: 'gpt-3.5-turbo-16k-0613', name: 'GPT-3.5 Turbo 16K (Jun 2023)', provider: 'openai' },
     ],
     anthropic: [
-        { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4 (Recommended)', provider: 'anthropic' },
+        // Claude 4.6 series (latest flagship, Aug 2025) - Recommended
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6 (Recommended)', provider: 'anthropic' },
+        { id: 'claude-opus-4-6-20250807', name: 'Claude Opus 4.6 (Aug 7)', provider: 'anthropic' },
+        { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic' },
+        { id: 'claude-sonnet-4-6-20250807', name: 'Claude Sonnet 4.6 (Aug 7)', provider: 'anthropic' },
+        // Claude 4.5 series (Sep-Nov 2025)
+        { id: 'claude-opus-4-5', name: 'Claude Opus 4.5', provider: 'anthropic' },
+        { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5 (Nov 1)', provider: 'anthropic' },
+        { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'anthropic' },
+        { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5 (Sep 29)', provider: 'anthropic' },
+        { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', provider: 'anthropic' },
+        { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5 (Oct 1)', provider: 'anthropic' },
+        // Claude 4.1 series (Aug 2025)
+        { id: 'claude-opus-4-1', name: 'Claude Opus 4.1', provider: 'anthropic' },
+        { id: 'claude-opus-4-1-20250805', name: 'Claude Opus 4.1 (Aug 5)', provider: 'anthropic' },
+        // Claude 4 series (May 2025)
+        { id: 'claude-opus-4', name: 'Claude Opus 4', provider: 'anthropic' },
+        { id: 'claude-opus-4-20250514', name: 'Claude Opus 4 (May 14)', provider: 'anthropic' },
+        { id: 'claude-opus-4-0', name: 'Claude Opus 4.0', provider: 'anthropic' },
+        { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'anthropic' },
+        { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4 (May 14)', provider: 'anthropic' },
+        { id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4.0', provider: 'anthropic' },
+        // Claude 3.7 Sonnet (Feb 2025)
+        { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet', provider: 'anthropic' },
+        { id: 'claude-3-7-sonnet-latest', name: 'Claude 3.7 Sonnet Latest', provider: 'anthropic' },
+        // Claude 3.5 series (2024)
         { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', provider: 'anthropic' },
+        { id: 'claude-3-5-sonnet-latest', name: 'Claude 3.5 Sonnet Latest', provider: 'anthropic' },
+        { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', provider: 'anthropic' },
+        { id: 'claude-3-5-haiku-latest', name: 'Claude 3.5 Haiku Latest', provider: 'anthropic' },
+        // Claude 3 Opus (2024)
         { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'anthropic' },
+        { id: 'claude-3-opus-latest', name: 'Claude 3 Opus Latest', provider: 'anthropic' },
+        // Claude 3 Sonnet (2024)
+        { id: 'claude-3-sonnet-20240229', name: 'Claude 3 Sonnet', provider: 'anthropic' },
+        // Claude 3 Haiku (2024)
         { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku', provider: 'anthropic' },
     ],
     gemini: [
-        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (Recommended)', provider: 'gemini' },
+        // Gemini 2.5 series (latest)
+        { id: 'gemini-2.5-flash-preview', name: 'Gemini 2.5 Flash Preview', provider: 'gemini' },
+        { id: 'gemini-2.5-flash-preview-04-21', name: 'Gemini 2.5 Flash Preview (Apr 21)', provider: 'gemini' },
+        { id: 'gemini-2.5-pro-preview', name: 'Gemini 2.5 Pro Preview (Recommended)', provider: 'gemini' },
+        { id: 'gemini-2.5-pro-preview-03-25', name: 'Gemini 2.5 Pro Preview (Mar 25)', provider: 'gemini' },
+        // Gemini 2.0 series
+        { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'gemini' },
+        { id: 'gemini-2.0-flash-001', name: 'Gemini 2.0 Flash (001)', provider: 'gemini' },
+        { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite', provider: 'gemini' },
+        { id: 'gemini-2.0-flash-lite-001', name: 'Gemini 2.0 Flash Lite (001)', provider: 'gemini' },
+        { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp', provider: 'gemini' },
+        { id: 'gemini-2.0-pro-exp-02-05', name: 'Gemini 2.0 Pro Exp (Feb 5)', provider: 'gemini' },
+        // Gemini 1.5 series
+        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', provider: 'gemini' },
+        { id: 'gemini-1.5-pro-002', name: 'Gemini 1.5 Pro (002)', provider: 'gemini' },
+        { id: 'gemini-1.5-pro-001', name: 'Gemini 1.5 Pro (001)', provider: 'gemini' },
         { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'gemini' },
-        { id: 'gemini-pro', name: 'Gemini Pro', provider: 'gemini' },
+        { id: 'gemini-1.5-flash-002', name: 'Gemini 1.5 Flash (002)', provider: 'gemini' },
+        { id: 'gemini-1.5-flash-001', name: 'Gemini 1.5 Flash (001)', provider: 'gemini' },
+        { id: 'gemini-1.5-flash-8b', name: 'Gemini 1.5 Flash 8B', provider: 'gemini' },
+        { id: 'gemini-1.5-flash-8b-001', name: 'Gemini 1.5 Flash 8B (001)', provider: 'gemini' },
+        // Gemini 1.0 series
+        { id: 'gemini-1.0-pro', name: 'Gemini 1.0 Pro', provider: 'gemini' },
+        { id: 'gemini-1.0-pro-002', name: 'Gemini 1.0 Pro (002)', provider: 'gemini' },
+        { id: 'gemini-1.0-pro-001', name: 'Gemini 1.0 Pro (001)', provider: 'gemini' },
+        { id: 'gemini-1.0-pro-vision-latest', name: 'Gemini 1.0 Pro Vision', provider: 'gemini' },
+        // Legacy
+        { id: 'gemini-pro', name: 'Gemini Pro (Legacy)', provider: 'gemini' },
     ],
 }
 
 export const DEFAULT_MODELS: Record<string, string> = {
     openai: 'gpt-4o',
-    anthropic: 'claude-sonnet-4-20250514',
-    gemini: 'gemini-1.5-pro',
+    anthropic: 'claude-opus-4-6',
+    gemini: 'gemini-2.5-flash-preview',
 }
 
 export type AgentRole = 

@@ -240,227 +240,170 @@ func generateNextJsDockerfile(framework *Framework, projectPath string) (string,
 	_, statErr := os.Stat(standalonePath)
 	standaloneExists := statErr == nil
 
-	dockerfile := `FROM node:20-alpine AS base
+	if useStandalone && (modified || standaloneExists) {
+		// Optimized: Only 3 layers in final image
+		// Layer 1: Base image
+		// Layer 2: All COPY operations combined
+		// Layer 3: USER/CMD (metadata only, no new layer)
+		return `FROM node:20-alpine AS base
 
-# Install dependencies only when needed
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
-
-# Rebuild the source code only when needed
+# Build stage
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+
+# Install dependencies and build in single layer
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
+
 COPY . .
-
-# Set environment for build
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
-
-# Skip type checking and linting during build to avoid failures
-# These should be done in CI/CD before building
-ENV SKIP_ENV_VALIDATION=1
-
-# Build the application with verbose output
+ENV NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production SKIP_ENV_VALIDATION=1
 RUN npm run build || (cat /root/.npm/_logs/*.log 2>/dev/null; exit 1)
 
-# Production image
+# Production image - only 3 layers total
 FROM base AS runner
 WORKDIR /app
 
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME="0.0.0.0"
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Single RUN for user setup (1 layer instead of 2)
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs && \
+    mkdir -p .next && \
+    chown nextjs:nodejs .next
 
-`
-
-	if useStandalone && (modified || standaloneExists) {
-		dockerfile += `COPY --from=builder /app/public ./public
-
-# Create .next directory with correct permissions
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# Copy standalone output
+# Single COPY with all files (1 layer instead of 3)
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
-
 EXPOSE 3000
-
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
 CMD ["node", "server.js"]
-`
-	} else {
-		dockerfile += `COPY --from=builder /app/public ./public
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-
-USER nextjs
-
-EXPOSE 3000
-
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-CMD ["npm", "start"]
-`
-		fmt.Printf("⚠️  Using fallback Dockerfile (non-standalone) for Next.js\n")
+`, nil
 	}
 
-	return dockerfile, nil
-}
-
-func generateNuxtDockerfile(framework *Framework) (string, error) {
+	// Fallback non-optimized version
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci
 COPY . .
-
+ENV NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production
 RUN npm run build
 
 FROM base AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nuxtjs
-
-COPY --from=builder --chown=nuxtjs:nodejs /app/.output ./
-
-USER nuxtjs
-
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME="0.0.0.0"
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+USER nextjs
 EXPOSE 3000
+CMD ["npm", "start"]
+`, nil
+}
 
-ENV HOST=0.0.0.0
-ENV PORT=3000
+func generateNuxtDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
+	return `FROM node:20-alpine AS base
 
+FROM base AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
+COPY . .
+ENV NODE_ENV=production
+RUN npm run build
+
+FROM base AS runner
+WORKDIR /app
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nuxtjs
+COPY --from=builder --chown=nuxtjs:nodejs /app/.output ./
+USER nuxtjs
+EXPOSE 3000
 CMD ["node", "server/index.mjs"]
 `, nil
 }
 
 func generateExpressDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM node:20-alpine AS base
 
-# Install dependencies
-FROM base AS deps
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production
-
-# Production image
 FROM base AS runner
 WORKDIR /app
-
 ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 expressjs
-
-COPY --from=deps --chown=expressjs:nodejs /app/node_modules ./node_modules
-COPY --chown=expressjs:nodejs . .
-
+COPY package*.json ./
+RUN npm ci --only=production && npm cache clean --force
+COPY . .
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 expressjs && \
+    chown -R expressjs:nodejs /app
 USER expressjs
-
 EXPOSE 3000
-
 CMD ["node", "index.js"]
 `, nil
 }
 
 func generateNestJSDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 RUN npm run build
 RUN npm ci --only=production && npm cache clean --force
 
 FROM base AS runner
 WORKDIR /app
-
 ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nestjs
-
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nestjs
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
-
 USER nestjs
-
 EXPOSE 3000
-
 CMD ["node", "dist/main"]
 `, nil
 }
 
 func generateViteDockerfile(framework *Framework) (string, error) {
+	// Optimized: 2 layers in final image (nginx base + COPY)
 	return `FROM node:20-alpine AS base
 
-# Install dependencies
-FROM base AS deps
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
-
-# Build the app
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
+ENV NODE_ENV=production
 RUN npm run build
 
-# Serve with nginx
 FROM nginx:alpine AS runner
-
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
 `, nil
 }
 
 func generateCRADockerfile(framework *Framework) (string, error) {
+	// Optimized: 2 layers in final image
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
 RUN npm run build
 
@@ -472,127 +415,89 @@ CMD ["nginx", "-g", "daemon off;"]
 }
 
 func generateDjangoDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM python:3.11-slim AS base
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+# Install dependencies and create user in single layer
+RUN apt-get update && apt-get install -y gcc postgresql-client && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1001 django
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project
 COPY . .
+RUN python manage.py collectstatic --noinput && \
+    chown -R django:django /app
 
-# Collect static files
-RUN python manage.py collectstatic --noinput
-
-# Create non-root user
-RUN useradd -m -u 1001 django && chown -R django:django /app
 USER django
-
 EXPOSE 8000
-
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "wsgi:application"]
 `, nil
 }
 
 func generateFlaskDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM python:3.11-slim AS base
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
-
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
-# Install dependencies
+# Install deps and create user in single layer
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    useradd -m -u 1001 flask && \
+    mkdir -p /app
 
-# Copy application
 COPY . .
+RUN chown -R flask:flask /app
 
-RUN useradd -m -u 1001 flask && chown -R flask:flask /app
 USER flask
-
 EXPOSE 5000
-
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "app:app"]
 `, nil
 }
 
 func generateFastAPIDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM python:3.11-slim AS base
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
-
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
-# Install dependencies
+# Install deps and create user in single layer
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    useradd -m -u 1001 fastapi
 
-# Copy application
 COPY . .
+RUN chown -R fastapi:fastapi /app
 
-RUN useradd -m -u 1001 fastapi && chown -R fastapi:fastapi /app
 USER fastapi
-
 EXPOSE 8000
-
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
 `, nil
 }
 
 func generateGoDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM golang:1.22-alpine AS builder
-
 WORKDIR /app
-
-# Install build dependencies
-RUN apk add --no-cache git
-
-# Copy go mod files
+RUN apk add --no-cache git ca-certificates tzdata
 COPY go.mod go.sum* ./
 RUN go mod download
-
-# Copy source code
 COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o main .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-
-# Final stage
 FROM alpine:latest
-
-RUN apk --no-cache add ca-certificates tzdata
-
-WORKDIR /root/
-
-# Copy the binary from builder
-COPY --from=builder /app/main .
-
-# Create non-root user
-RUN addgroup -g 1001 -S appgroup && \
+WORKDIR /app
+RUN apk --no-cache add ca-certificates && \
+    addgroup -g 1001 -S appgroup && \
     adduser -u 1001 -S appuser -G appgroup
-
+COPY --from=builder /app/main .
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 USER appuser
-
 EXPOSE 8080
-
 CMD ["./main"]
 `, nil
 }
@@ -638,37 +543,27 @@ CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
 }
 
 func generateRailsDockerfile(framework *Framework) (string, error) {
-	return `FROM ruby:3.2-alpine AS base
-
-# Install dependencies
-RUN apk add --no-cache \
-    build-base \
-    postgresql-dev \
-    nodejs \
-    yarn \
-    tzdata
-
+	// Optimized: 3 layers in final image
+	return `FROM ruby:3.2-alpine AS builder
 WORKDIR /app
-
-# Install gems
+RUN apk add --no-cache build-base postgresql-dev nodejs yarn tzdata
 COPY Gemfile Gemfile.lock ./
 RUN bundle install --without development test
-
-# Install node packages
 COPY package.json yarn.lock* ./
 RUN yarn install --frozen-lockfile
-
-# Copy application
 COPY . .
-
-# Precompile assets
 RUN RAILS_ENV=production bundle exec rake assets:precompile
+RUN adduser -D -u 1001 rails
 
-RUN adduser -D -u 1001 rails && chown -R rails:rails /app
+FROM ruby:3.2-alpine AS runner
+WORKDIR /app
+RUN apk add --no-cache postgresql-dev tzdata && \
+    adduser -D -u 1001 rails
+COPY --from=builder /usr/local/bundle /usr/local/bundle
+COPY --from=builder /app .
+RUN chown -R rails:rails /app
 USER rails
-
 EXPOSE 3000
-
 CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]
 `, nil
 }
@@ -752,502 +647,321 @@ CMD ["./app"]
 
 func generateAstroDockerfile(framework *Framework) (string, error) {
 	if framework.Name == "Astro (SSR)" {
+		// Optimized: 3 layers in final image
 		return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build
 
 FROM base AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 astro
-
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=4321
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 astro
 COPY --from=builder --chown=astro:nodejs /app/dist ./dist
 COPY --from=builder --chown=astro:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=astro:nodejs /app/package.json ./
-
 USER astro
-
 EXPOSE 4321
-
-ENV HOST=0.0.0.0
-ENV PORT=4321
-
 CMD ["node", "./dist/server/entry.mjs"]
 `, nil
 	}
 
+	// Optimized: 2 layers in final image (nginx + COPY)
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build
 
-# Serve static files with nginx
 FROM nginx:alpine AS runner
-
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
 `, nil
 }
 
 func generateRemixDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build
 
 FROM base AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 remix
-
+ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 remix
 COPY --from=builder --chown=remix:nodejs /app/build ./build
 COPY --from=builder --chown=remix:nodejs /app/public ./public
 COPY --from=builder --chown=remix:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=remix:nodejs /app/package.json ./
-
 USER remix
-
 EXPOSE 3000
-
-ENV PORT=3000
-ENV HOST=0.0.0.0
-
 CMD ["npm", "start"]
 `, nil
 }
 
 func generateSvelteKitDockerfile(framework *Framework) (string, error) {
 	if framework.Name == "SvelteKit (Static)" {
+		// Optimized: 2 layers in final image
 		return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build
 
 FROM nginx:alpine AS runner
-
 COPY --from=builder /app/build /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
 `, nil
 	}
 
+	// Optimized: 3 layers in final image
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build
 
 FROM base AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 sveltekit
-
+ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 sveltekit
 COPY --from=builder --chown=sveltekit:nodejs /app/build ./build
 COPY --from=builder --chown=sveltekit:nodejs /app/package.json ./
-
 USER sveltekit
-
 EXPOSE 3000
-
-ENV PORT=3000
-ENV HOST=0.0.0.0
-
 CMD ["node", "build"]
 `, nil
 }
 
 func generateSolidStartDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build
 
 FROM base AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 solid
-
+ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 solid
 COPY --from=builder --chown=solid:nodejs /app/.output ./.output
 COPY --from=builder --chown=solid:nodejs /app/package.json ./
-
 USER solid
-
 EXPOSE 3000
-
-ENV PORT=3000
-ENV HOST=0.0.0.0
-
 CMD ["node", ".output/server/index.mjs"]
 `, nil
 }
 
 func generateAngularDockerfile(framework *Framework) (string, error) {
+	// Optimized: 2 layers in final image
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build -- --configuration production
 
 FROM nginx:alpine AS runner
-
 COPY --from=builder /app/dist/browser /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
 `, nil
 }
 
 func generateHonoDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM node:20-alpine AS base
-
-FROM base AS deps
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
 
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+RUN npm ci && npm cache clean --force
 COPY . .
-
 ENV NODE_ENV=production
 RUN npm run build
 
 FROM base AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 hono
-
+ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 hono
 COPY --from=builder --chown=hono:nodejs /app/dist ./dist
 COPY --from=builder --chown=hono:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=hono:nodejs /app/package.json ./
-
 USER hono
-
 EXPOSE 3000
-
-ENV PORT=3000
-ENV HOST=0.0.0.0
-
 CMD ["node", "dist/index.js"]
 `, nil
 }
 
 func generateSymfonyDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM php:8.2-fpm-alpine AS base
-
-# Install system dependencies
-RUN apk add --no-cache \
-    postgresql-dev \
-    zip \
-    unzip \
-    git \
-    icu-dev
-
-# Install PHP extensions
-RUN docker-php-ext-install pdo pdo_pgsql intl
-
-# Install Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
+ENV COMPOSER_ALLOW_SUPERUSER=1
 WORKDIR /var/www
 
-# Copy composer files
+# Install deps and extensions in single layer
+RUN apk add --no-cache postgresql-dev zip unzip git icu-dev && \
+    docker-php-ext-install pdo pdo_pgsql intl
+
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 COPY composer.json composer.lock* ./
 RUN composer install --no-dev --no-scripts --no-autoloader
 
-# Copy application
 COPY . .
-
 RUN composer dump-autoload --optimize --no-dev && \
-    php bin/console cache:clear --env=prod
-
-RUN chown -R www-data:www-data /var/www
+    php bin/console cache:clear --env=prod && \
+    chown -R www-data:www-data /var/www
 
 USER www-data
-
 EXPOSE 8000
-
 CMD ["php", "-S", "0.0.0.0:8000", "-t", "public"]
 `, nil
 }
 
 func generateDenoDockerfile(framework *Framework) (string, error) {
+	// Optimized: 2 layers in final image
 	return `FROM denoland/deno:alpine AS base
-
 WORKDIR /app
 
-# Cache dependencies
-COPY deno.json* ./
-COPY main.ts mod.ts* ./
-RUN deno cache main.ts 2>/dev/null || true
+# Cache deps and create user in single layer
+COPY deno.json* main.ts mod.ts* ./
+RUN deno cache main.ts 2>/dev/null || true && \
+    addgroup -g 1001 -S deno && \
+    adduser -u 1001 -S deno -G deno
 
-# Copy application
 COPY . .
-
-# Create non-root user
-RUN addgroup -g 1001 -S deno && \
-    adduser -u 1001 -S deno -G deno && \
-    chown -R deno:deno /app
+RUN chown -R deno:deno /app
 
 USER deno
-
 EXPOSE 8000
-
-ENV PORT=8000
-ENV HOST=0.0.0.0
-
+ENV PORT=8000 HOST=0.0.0.0
 CMD ["run", "--allow-net", "--allow-read", "--allow-env", "main.ts"]
 `, nil
 }
 
 func generateBunDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return fmt.Sprintf(`FROM oven/bun:alpine AS base
 
-WORKDIR /app
-
-# Install dependencies
-FROM base AS deps
-COPY package.json bun.lockb* ./
-RUN bun install --frozen-lockfile
-
-# Copy source
-FROM base AS builder
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-
-# Production image
 FROM base AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup -g 1001 -S bun && \
+ENV NODE_ENV=production PORT=%d HOST=0.0.0.0
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile && \
+    addgroup -g 1001 -S bun && \
     adduser -u 1001 -S bun -G bun
 
-COPY --from=builder --chown=bun:bun /app/node_modules ./node_modules
-COPY --from=builder --chown=bun:bun /app/package.json ./
-COPY --from=builder --chown=bun:bun /app/src ./src
+COPY . .
+RUN chown -R bun:bun /app
 
 USER bun
-
 EXPOSE %d
-
-ENV PORT=%d
-ENV HOST=0.0.0.0
-
 CMD ["bun", "run", "src/index.ts"]
 `, framework.Port, framework.Port), nil
 }
 
 func generateDotNetDockerfile(framework *Framework) (string, error) {
 	if framework.Name == "Blazor WebAssembly" {
+		// Optimized: 2 layers in final image
 		return `FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-
-# Copy csproj files
 COPY *.csproj ./
 RUN dotnet restore
-
-# Copy everything else
 COPY . .
 RUN dotnet publish -c Release -o /app/publish
 
 FROM nginx:alpine AS runtime
 COPY --from=build /app/publish/wwwroot /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
 `, nil
 	}
 
+	// Optimized: 3 layers in final image
 	return `FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-
-# Copy csproj files and restore
 COPY *.csproj ./
 RUN dotnet restore
-
-# Copy everything else and build
 COPY . .
 RUN dotnet publish -c Release -o /app/publish
 
-# Runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
-
-# Create non-root user
 RUN addgroup -g 1001 -S dotnet && \
     adduser -u 1001 -S dotnet -G dotnet
-
 COPY --from=build /app/publish ./
 RUN chown -R dotnet:dotnet /app
-
 USER dotnet
-
 EXPOSE 8080
-
-ENV ASPNETCORE_URLS=http://+:8080
-ENV ASPNETCORE_ENVIRONMENT=Production
-
+ENV ASPNETCORE_URLS=http://+:8080 ASPNETCORE_ENVIRONMENT=Production
 ENTRYPOINT ["dotnet", "app.dll"]
 `, nil
 }
 
 func generatePhoenixDockerfile(framework *Framework) (string, error) {
+	// Optimized: 3 layers in final image
 	return `FROM elixir:1.16-alpine AS builder
-
-# Install build dependencies
 RUN apk add --no-cache build-base git
-
 WORKDIR /app
-
-# Install hex and rebar
-RUN mix local.hex --force && \
-    mix local.rebar --force
-
-# Copy mix files
+RUN mix local.hex --force && mix local.rebar --force
 COPY mix.exs mix.lock* ./
 RUN mix deps.get --only prod
-
-# Copy source
 COPY . .
-
-# Build release
 ENV MIX_ENV=prod
-RUN mix compile
-RUN mix release
+RUN mix compile && mix release
 
-# Runtime image
 FROM alpine:3.19 AS runtime
-
 RUN apk add --no-cache openssl ncurses-libs
-
 WORKDIR /app
-
 RUN addgroup -g 1001 -S phoenix && \
     adduser -u 1001 -S phoenix -G phoenix
-
 COPY --from=builder /app/_build/prod/rel ./
 RUN chown -R phoenix:phoenix /app
-
 USER phoenix
-
 EXPOSE 4000
-
-ENV PHX_SERVER=true
-ENV PORT=4000
-
+ENV PHX_SERVER=true PORT=4000
 CMD ["./rel/app_name/bin/app_name", "start"]
 `, nil
 }

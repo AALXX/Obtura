@@ -290,7 +290,19 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
         set({ activeConversationId: conversationId })
     },
 
-    deleteConversation: (conversationId: string) => {
+    deleteConversation: async (conversationId: string) => {
+        // Only call the API if the conversationId looks like a real UUID (36 chars)
+        if (conversationId && conversationId.length === 36) {
+            try {
+                await axios.delete(`${AI_AGENT_URL}/api/conversations/${conversationId}`, {
+                    timeout: 10000,
+                })
+            } catch (error) {
+                console.error('Failed to delete conversation from backend:', error)
+                // Still remove from local state even if backend call fails
+            }
+        }
+
         set(state => {
             const filtered = state.conversations.filter(c => c.id !== conversationId)
             
@@ -331,34 +343,38 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
         }
 
         try {
-            const providerMap: Record<string, string> = {
-                'openai': 'openai',
-                'claude': 'anthropic',
-                'gemini': 'gemini',
-            }
-            
-            const mappedProvider = providerMap[settings.defaultProvider] || 'openai'
-            const apiKey = settings.defaultProvider === 'openai' 
-                ? settings.openai_api_key 
-                : settings.defaultProvider === 'claude'
-                    ? settings.claude_api_key
-                    : settings.gemini_api_key
+            // Save ALL provider keys that have been entered, not just the active one.
+            // This ensures that when the user switches providers, the key is already in the DB.
+            const providerKeyMap: Array<{ frontendKey: string; backendProvider: string; apiKey: string }> = [
+                { frontendKey: 'openai', backendProvider: 'openai', apiKey: settings.openai_api_key },
+                { frontendKey: 'claude', backendProvider: 'anthropic', apiKey: settings.claude_api_key },
+                { frontendKey: 'gemini', backendProvider: 'gemini', apiKey: settings.gemini_api_key },
+            ]
 
-            if (apiKey) {
-                const defaultModel = DEFAULT_MODELS[mappedProvider] || DEFAULT_MODELS.openai
-                const selectedModel = settings.model || defaultModel
+            for (const entry of providerKeyMap) {
+                if (!entry.apiKey) continue
 
-                console.log('Saving settings to backend - provider:', mappedProvider, 'model:', selectedModel)
-                
+                // Use the active model only for the selected provider; use the provider default otherwise
+                const isActiveProvider = 
+                    (settings.defaultProvider === entry.frontendKey) ||
+                    (settings.defaultProvider === 'anthropic' && entry.frontendKey === 'claude')
+                const model = isActiveProvider
+                    ? (settings.model || DEFAULT_MODELS[entry.backendProvider] || DEFAULT_MODELS.openai)
+                    : DEFAULT_MODELS[entry.backendProvider] || DEFAULT_MODELS.openai
+
+                console.log(`Saving provider config - provider: ${entry.backendProvider}, model: ${model}, active: ${isActiveProvider}`)
+
                 await axios.post(
                     `${AI_AGENT_URL}/api/providers/configs`,
                     {
                         projectId,
                         accessToken,
-                        provider: mappedProvider,
-                        providerName: `${settings.defaultProvider} Key`,
-                        apiKey: apiKey,
-                        model: selectedModel,
+                        input: {
+                            provider: entry.backendProvider,
+                            providerName: `${entry.frontendKey} Key`,
+                            apiKey: entry.apiKey,
+                            model,
+                        },
                     },
                     {
                         headers: { 'Content-Type': 'application/json' },
@@ -367,16 +383,40 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                 )
             }
 
-            if (settings.agentStrategy !== 'single') {
+            // After saving all keys, set the active provider explicitly by updating its record
+            // to ensure GetActiveProviderForProject returns the right one on the next request.
+            // We do this by re-saving the active provider last (upsert makes it the newest row).
+            const activeProviderMap: Record<string, string> = {
+                'openai': 'openai',
+                'claude': 'anthropic',
+                'anthropic': 'anthropic',
+                'gemini': 'gemini',
+            }
+            const activeBackendProvider = activeProviderMap[settings.defaultProvider] || 'openai'
+            const activeApiKey = settings.defaultProvider === 'openai'
+                ? settings.openai_api_key
+                : settings.defaultProvider === 'claude' || settings.defaultProvider === 'anthropic'
+                    ? settings.claude_api_key
+                    : settings.gemini_api_key
+
+            // If we have the active key, save it again last so it is the newest row
+            // and GetActiveProviderForProject (ORDER BY created_at DESC LIMIT 1) picks it.
+            // Only needed when multiple provider keys were entered simultaneously.
+            const otherKeysSaved = providerKeyMap.filter(e => e.apiKey && e.backendProvider !== activeBackendProvider).length > 0
+            if (activeApiKey && otherKeysSaved) {
+                const activeModel = settings.model || DEFAULT_MODELS[activeBackendProvider] || DEFAULT_MODELS.openai
+                console.log(`Re-saving active provider last to ensure priority: ${activeBackendProvider}`)
                 await axios.post(
-                    `${AI_AGENT_URL}/api/agent/preferences`,
+                    `${AI_AGENT_URL}/api/providers/configs`,
                     {
                         projectId,
                         accessToken,
-                        strategy: settings.agentStrategy,
-                        preset: settings.agentPreset,
-                        selectedAgents: settings.selectedAgents,
-                        customAgents: settings.customAgents,
+                        input: {
+                            provider: activeBackendProvider,
+                            providerName: `${settings.defaultProvider === 'anthropic' ? 'claude' : settings.defaultProvider} Key`,
+                            apiKey: activeApiKey,
+                            model: activeModel,
+                        },
                     },
                     {
                         headers: { 'Content-Type': 'application/json' },
@@ -384,6 +424,22 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     }
                 )
             }
+
+            await axios.post(
+                `${AI_AGENT_URL}/api/agent/preferences`,
+                {
+                    projectId,
+                    accessToken,
+                    strategy: settings.agentStrategy,
+                    preset: settings.agentPreset,
+                    selectedAgents: settings.selectedAgents,
+                    customAgents: settings.customAgents,
+                },
+                {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 10000,
+                }
+            )
 
             set({ 
                 settings: {
@@ -392,12 +448,15 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     claude_api_key: '',
                     gemini_api_key: '',
                 },
-                
                 isSaving: false 
             })
         } catch (error: any) {
-            console.error('Failed to save settings:', error.response?.data || error.message)
+            const responseData = error?.response?.data
+            const statusCode = error?.response?.status
+            const errMsg = responseData?.error || responseData?.message || error?.message || 'Unknown error'
+            console.error('Failed to save settings:', { statusCode, responseData, errMsg })
             set({ isSaving: false })
+            throw error
         }
     },
 
@@ -410,7 +469,7 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
         }
 
         try {
-            const response = await axios.get<{ configs?: Array<{ provider: string; model: string; hasKey: boolean }> }>(
+            const response = await axios.get<{ configs?: Array<{ provider: string; model: string; hasKey: boolean; updatedAt?: string; createdAt?: string }> }>(
                 `${AI_AGENT_URL}/api/providers/configs?projectId=${projectId}`,
                 { timeout: 5000 }
             )
@@ -431,9 +490,19 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     gemini: false,
                 }
 
-                const defaultProvider = configs[0].provider
+                // configs are ordered by created_at DESC from the API.
+                // Pick the active provider as the one with the most recent updated_at,
+                // which matches GetActiveProviderForProject (ORDER BY updated_at DESC LIMIT 1).
+                const sortedByUpdated = [...configs].sort((a, b) => {
+                    const aTime = (a as any).updatedAt ? new Date((a as any).updatedAt).getTime() : 0
+                    const bTime = (b as any).updatedAt ? new Date((b as any).updatedAt).getTime() : 0
+                    return bTime - aTime
+                })
+                const activeConfig = sortedByUpdated[0]
+
+                const defaultProvider = activeConfig.provider
                 const mappedProvider = providerMap[defaultProvider] || defaultProvider
-                const model = configs[0].model
+                const model = activeConfig.model
 
                 configs.forEach(config => {
                     const key = config.provider as keyof typeof hasKeys
@@ -442,7 +511,7 @@ export const useAIAgentStore = create<AIAgentState & AIAgentActions>((set, get) 
                     }
                 })
 
-                console.log('🔄 Mapping provider:', defaultProvider, '->', mappedProvider, 'model:', model, 'hasKeys:', hasKeys)
+                console.log('🔄 Active provider (most recently updated):', defaultProvider, '->', mappedProvider, 'model:', model, 'hasKeys:', hasKeys)
                 
                 set(state => ({
                     settings: {

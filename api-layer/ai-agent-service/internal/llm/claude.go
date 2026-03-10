@@ -105,6 +105,10 @@ func (p *ClaudeProvider) Complete(ctx context.Context, req CompletionRequest) (*
 			Text string `json:"text"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
+		Usage      struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -118,6 +122,8 @@ func (p *ClaudeProvider) Complete(ctx context.Context, req CompletionRequest) (*
 	return &CompletionResponse{
 		Content:      result.Content[0].Text,
 		FinishReason: result.StopReason,
+		InputTokens:  result.Usage.InputTokens,
+		OutputTokens: result.Usage.OutputTokens,
 	}, nil
 }
 

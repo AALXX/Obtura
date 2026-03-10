@@ -305,6 +305,7 @@ type MultiAgentInput struct {
 	Provider          llm.Provider
 	Model             string
 	BaseSystemPrompt  string
+	EnrichedContext   string        // live platform data injected before the LLM call
 	ConversationSlice []llm.Message // non-system history (user/assistant)
 	UserMessage       string
 	StrategyRaw       string
@@ -314,9 +315,11 @@ type MultiAgentInput struct {
 }
 
 type MultiAgentOutput struct {
-	Strategy Strategy       `json:"strategy"`
-	Preset   Preset         `json:"preset"`
-	Messages []AgentMessage `json:"messages"`
+	Strategy     Strategy       `json:"strategy"`
+	Preset       Preset         `json:"preset"`
+	Messages     []AgentMessage `json:"messages"`
+	InputTokens  int            `json:"inputTokens"`
+	OutputTokens int            `json:"outputTokens"`
 }
 
 func GetAgents(in MultiAgentInput) []AgentSpec {
@@ -343,9 +346,16 @@ func Run(ctx context.Context, in MultiAgentInput) (*MultiAgentOutput, error) {
 	strategy := normalizeStrategy(in.StrategyRaw)
 	preset := normalizePreset(in.PresetRaw)
 
-	base := make([]llm.Message, 0, 2+len(in.ConversationSlice)+6)
+	base := make([]llm.Message, 0, 3+len(in.ConversationSlice)+6)
 	if strings.TrimSpace(in.BaseSystemPrompt) != "" {
 		base = append(base, llm.Message{Role: "system", Content: in.BaseSystemPrompt})
+	}
+	// Inject live platform data (builds, deployments, metrics, logs) when available.
+	if strings.TrimSpace(in.EnrichedContext) != "" {
+		base = append(base, llm.Message{
+			Role:    "system",
+			Content: "The following is REAL live data fetched from the Obtura platform. Use it directly in your response — do not say you lack access to this information.\n\n" + in.EnrichedContext,
+		})
 	}
 	base = append(base, in.ConversationSlice...)
 
@@ -363,8 +373,10 @@ func Run(ctx context.Context, in MultiAgentInput) (*MultiAgentOutput, error) {
 			return nil, err
 		}
 		return &MultiAgentOutput{
-			Strategy: strategy,
-			Preset:   preset,
+			Strategy:     strategy,
+			Preset:       preset,
+			InputTokens:  resp.InputTokens,
+			OutputTokens: resp.OutputTokens,
 			Messages: []AgentMessage{
 				{
 					Role:      RoleAssistant,
@@ -412,6 +424,9 @@ func Run(ctx context.Context, in MultiAgentInput) (*MultiAgentOutput, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		out.InputTokens += resp.InputTokens
+		out.OutputTokens += resp.OutputTokens
 
 		content := strings.TrimSpace(resp.Content)
 		out.Messages = append(out.Messages, AgentMessage{

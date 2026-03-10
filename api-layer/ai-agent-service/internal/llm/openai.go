@@ -93,6 +93,10 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (*
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -106,6 +110,8 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (*
 	return &CompletionResponse{
 		Content:      result.Choices[0].Message.Content,
 		FinishReason: result.Choices[0].FinishReason,
+		InputTokens:  result.Usage.PromptTokens,
+		OutputTokens: result.Usage.CompletionTokens,
 	}, nil
 }
 
