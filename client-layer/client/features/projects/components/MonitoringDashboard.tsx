@@ -1,15 +1,86 @@
 'use client'
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import * as d3 from 'd3'
-import { Activity, TrendingUp, Zap, AlertCircle, Clock, Globe, Cpu, Database, Server, Layers, ArrowUp, ArrowDown, Minus, Check, X, Wifi, WifiOff } from 'lucide-react'
+import { Activity, TrendingUp, Zap, AlertCircle, Clock, Globe, Cpu, Database, Server, Layers, ArrowUp, ArrowDown, Minus, Check, X, Wifi, WifiOff, ChevronLeft, ChevronRight, Minus as MinusIcon, Trash2 } from 'lucide-react'
 import { ProjectData, Alert as ProjectAlert } from '../Types/ProjectTypes'
 import axios from 'axios'
 import { useProjectMetricsUpdates } from '@/hooks/useProjectMetrics'
+
+// Custom Checkbox Component with dark theme styling
+interface CustomCheckboxProps {
+    checked?: boolean
+    indeterminate?: boolean
+    onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void
+    className?: string
+    id?: string
+}
+
+const CustomCheckbox = React.forwardRef<HTMLInputElement, CustomCheckboxProps>(
+    ({ checked, indeterminate, onChange, className = '', id }, ref) => {
+        const internalRef = useRef<HTMLInputElement>(null)
+
+        // Handle both forwarded ref and internal ref
+        const setRefs = useCallback(
+            (el: HTMLInputElement | null) => {
+                internalRef.current = el
+                if (typeof ref === 'function') {
+                    ref(el)
+                } else if (ref) {
+                    ref.current = el
+                }
+            },
+            [ref]
+        )
+
+        // Apply indeterminate state via DOM property
+        useEffect(() => {
+            if (internalRef.current) {
+                internalRef.current.indeterminate = indeterminate || false
+            }
+        }, [indeterminate])
+
+        const isChecked = checked || false
+        const isIndeterminate = indeterminate || false
+        const hasValue = isChecked || isIndeterminate
+
+        return (
+            <label className={`relative inline-flex items-center cursor-pointer ${className}`}>
+                <input
+                    ref={setRefs}
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={onChange}
+                    id={id}
+                    className="peer sr-only"
+                />
+                <div className={`
+                    h-4 w-4 rounded border transition-all duration-200 ease-in-out
+                    flex items-center justify-center
+                    peer-focus:ring-2 peer-focus:ring-blue-500/30 peer-focus:ring-offset-0
+                    ${hasValue
+                        ? 'bg-blue-500 border-blue-500 shadow-sm shadow-blue-500/20'
+                        : 'bg-zinc-800/80 border-zinc-600 hover:border-zinc-500 hover:bg-zinc-700/80'
+                    }
+                `}>
+                    {isChecked && !isIndeterminate && (
+                        <Check className="w-2.5 h-2.5 text-white stroke-[3] transition-transform duration-150 ease-out scale-100" />
+                    )}
+                    {isIndeterminate && (
+                        <MinusIcon className="w-2.5 h-2.5 text-white stroke-[3] transition-transform duration-150 ease-out scale-100" />
+                    )}
+                </div>
+            </label>
+        )
+    }
+)
+
+CustomCheckbox.displayName = 'CustomCheckbox'
 
 interface MonitoringProps {
     projectData: ProjectData
     alerts: ProjectAlert[]
     onResolveAlert: (alertId: string) => void
+    onDeleteAlert?: (alertId: string) => void
     resolvingAlerts: Set<string>
     accessToken: string
     projectId: string
@@ -1011,7 +1082,7 @@ const TimeRangeSelector: React.FC<{
     )
 }
 
-const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: propAlerts, onResolveAlert, resolvingAlerts, accessToken, projectId }) => {
+const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: propAlerts, onResolveAlert, onDeleteAlert, resolvingAlerts, accessToken, projectId }) => {
     const [timeRange, setTimeRange] = useState('24h')
     const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'errors' | 'infrastructure'>('overview')
     const [metricData, setMetricData] = useState<MetricData | null>(null)
@@ -1019,6 +1090,10 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
     const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [dataError, setDataError] = useState<string | null>(null)
+    const [alertsPage, setAlertsPage] = useState(1)
+    const [alertsPerPage, setAlertsPerPage] = useState(3)
+    const [selectedAlerts, setSelectedAlerts] = useState<Set<string>>(new Set())
+    const [deletingAlerts, setDeletingAlerts] = useState<Set<string>>(new Set())
 
     const fetchInitialMetrics = useCallback(async (range: string) => {
         setIsLoading(true)
@@ -1068,6 +1143,64 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
             onResolveAlert(alertId)
         } catch (error) {
             console.error('Failed to resolve alert:', error)
+        }
+    }
+
+    const handleResolveSelected = async () => {
+        await Promise.all([...selectedAlerts].map(id => handleResolveAlert(id)))
+        setSelectedAlerts(new Set())
+    }
+
+    const handleDeleteAlert = async (alertId: string) => {
+        try {
+            setDeletingAlerts(prev => new Set(prev).add(alertId))
+            const monitoringUrl = process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL || 'http://localhost:5110'
+            // Use query parameter for access token (consistent with other endpoints)
+            await axios.delete(`${monitoringUrl}/api/alerts/${alertId}?accessToken=${accessToken}`)
+            setAlerts(prev => prev.filter(a => a.id !== alertId))
+            setSelectedAlerts(prev => {
+                const next = new Set(prev)
+                next.delete(alertId)
+                return next
+            })
+            // Call the callback prop to notify parent component
+            onDeleteAlert?.(alertId)
+        } catch (error) {
+            console.error('Failed to delete alert:', error)
+            alert('Failed to delete alert. Please try again.')
+        } finally {
+            setDeletingAlerts(prev => {
+                const next = new Set(prev)
+                next.delete(alertId)
+                return next
+            })
+        }
+    }
+
+    const handleDeleteSelected = async () => {
+        const alertIds = [...selectedAlerts]
+        if (alertIds.length === 0) return
+
+        // Set all selected alerts as deleting
+        setDeletingAlerts(prev => new Set([...prev, ...alertIds]))
+
+        try {
+            const results = await Promise.allSettled(alertIds.map(id => handleDeleteAlert(id)))
+            const failures = results.filter(r => r.status === 'rejected')
+            if (failures.length > 0) {
+                console.error(`Failed to delete ${failures.length} of ${alertIds.length} alerts`)
+            }
+        } catch (error) {
+            console.error('Failed to delete selected alerts:', error)
+        } finally {
+            // Clear selection after deletion attempt
+            setSelectedAlerts(new Set())
+            // Remove all from deleting state
+            setDeletingAlerts(prev => {
+                const next = new Set(prev)
+                alertIds.forEach(id => next.delete(id))
+                return next
+            })
         }
     }
 
@@ -1249,16 +1382,81 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                         <div className="rounded-lg border border-zinc-800 bg-[#1b1b1b] p-5">
                             <div className="mb-4 flex items-center justify-between">
                                 <div className="flex items-center gap-2">
+                                    <CustomCheckbox
+                                        checked={selectedAlerts.size > 0 && alerts.slice((alertsPage - 1) * alertsPerPage, alertsPage * alertsPerPage).every(a => selectedAlerts.has(a.id))}
+                                        indeterminate={selectedAlerts.size > 0 && !alerts.slice((alertsPage - 1) * alertsPerPage, alertsPage * alertsPerPage).every(a => selectedAlerts.has(a.id)) && alerts.slice((alertsPage - 1) * alertsPerPage, alertsPage * alertsPerPage).some(a => selectedAlerts.has(a.id))}
+                                        onChange={e => {
+                                            const pageAlerts = alerts.slice((alertsPage - 1) * alertsPerPage, alertsPage * alertsPerPage)
+                                            if (e.target.checked) {
+                                                setSelectedAlerts(prev => new Set([...prev, ...pageAlerts.map(a => a.id)]))
+                                            } else {
+                                                setSelectedAlerts(prev => { const next = new Set(prev); pageAlerts.forEach(a => next.delete(a.id)); return next })
+                                            }
+                                        }}
+                                    />
                                     <AlertCircle className="text-red-500" size={20} />
                                     <h3 className="font-semibold text-white">Active Alerts ({alerts.length})</h3>
                                 </div>
+                                {selectedAlerts.size > 0 && (
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs text-zinc-400">{selectedAlerts.size} selected</span>
+                                        <button
+                                            onClick={handleResolveSelected}
+                                            className="flex items-center gap-1.5 rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 transition-all hover:bg-green-500/20"
+                                        >
+                                            <Check size={13} />
+                                            Resolve selected
+                                        </button>
+                                        <button
+                                            onClick={(e) => {
+                                                // Require Shift+Click to prevent accidental deletion
+                                                if (!e.shiftKey) {
+                                                    alert('Hold Shift and click to delete selected alerts')
+                                                    return
+                                                }
+                                                handleDeleteSelected()
+                                            }}
+                                            disabled={deletingAlerts.size > 0}
+                                            className="flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-400 transition-all hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {deletingAlerts.size > 0 ? (
+                                                <>
+                                                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
+                                                    Deleting...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Trash2 size={13} />
+                                                    Delete selected
+                                                </>
+                                            )}
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setSelectedAlerts(new Set(alerts.map(a => a.id)))
+                                            }}
+                                            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 transition-all hover:bg-zinc-800"
+                                        >
+                                            Select all {alerts.length}
+                                        </button>
+                                        <button
+                                            onClick={() => setSelectedAlerts(new Set())}
+                                            className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 p-1.5 text-zinc-400 transition-all hover:bg-zinc-800 hover:text-white"
+                                            title="Clear selection"
+                                        >
+                                            <X size={13} />
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                             <div className="space-y-3">
-                                {alerts.map(alert => (
+                                {alerts.slice((alertsPage - 1) * alertsPerPage, alertsPage * alertsPerPage).map(alert => (
                                     <div
                                         key={alert.id}
                                         className={`rounded-lg border p-4 transition-all ${
-                                            alert.severity === 'critical'
+                                            selectedAlerts.has(alert.id)
+                                                ? 'border-zinc-500/60 bg-zinc-700/20'
+                                                : alert.severity === 'critical'
                                                 ? 'border-red-500/30 bg-red-500/10'
                                                 : alert.severity === 'high'
                                                 ? 'border-orange-500/30 bg-orange-500/10'
@@ -1269,6 +1467,18 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                     >
                                         <div className="flex items-start justify-between gap-4">
                                             <div className="flex items-start gap-3 min-w-0">
+                                                <div className="mt-0.5">
+                                                    <CustomCheckbox
+                                                        checked={selectedAlerts.has(alert.id)}
+                                                        onChange={e => {
+                                                            setSelectedAlerts(prev => {
+                                                                const next = new Set(prev)
+                                                                e.target.checked ? next.add(alert.id) : next.delete(alert.id)
+                                                                return next
+                                                            })
+                                                        }}
+                                                    />
+                                                </div>
                                                 <AlertCircle
                                                     className={`mt-0.5 shrink-0 ${
                                                         alert.severity === 'critical'
@@ -1320,18 +1530,67 @@ const MonitoringDashboard: React.FC<MonitoringProps> = ({ projectData, alerts: p
                                                     )}
                                                 </button>
                                                 <button
-                                                    onClick={() => handleResolveAlert(alert.id)}
-                                                    disabled={resolvingAlerts.has(alert.id)}
-                                                    className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 p-1.5 text-zinc-400 transition-all hover:bg-zinc-800 hover:text-white disabled:opacity-50"
-                                                    title="Dismiss"
+                                                    onClick={(e) => {
+                                                        // Require Shift+Click to prevent accidental deletion
+                                                        if (!e.shiftKey) {
+                                                            alert('Hold Shift and click to delete this alert')
+                                                            return
+                                                        }
+                                                        handleDeleteAlert(alert.id)
+                                                    }}
+                                                    disabled={deletingAlerts.has(alert.id)}
+                                                    className="flex items-center justify-center rounded-lg border border-red-500/30 bg-red-500/10 p-1.5 text-red-400 transition-all hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    title="Delete (Shift+Click)"
                                                 >
-                                                    <X size={14} />
+                                                    {deletingAlerts.has(alert.id) ? (
+                                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
+                                                    ) : (
+                                                        <Trash2 size={14} />
+                                                    )}
                                                 </button>
                                             </div>
                                         </div>
                                     </div>
                                 ))}
                             </div>
+                            {alerts.length > alertsPerPage && (
+                                <div className="mt-4 flex items-center justify-between">
+                                    <select
+                                        value={alertsPerPage}
+                                        onChange={e => {
+                                            setAlertsPerPage(Number(e.target.value))
+                                            setAlertsPage(1)
+                                        }}
+                                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-300"
+                                    >
+                                        <option value={3}>3 per page</option>
+                                        <option value={10}>10 per page</option>
+                                        <option value={25}>25 per page</option>
+                                    </select>
+                                    <span className="text-xs text-zinc-500">
+                                        Showing {(alertsPage - 1) * alertsPerPage + 1}–{Math.min(alertsPage * alertsPerPage, alerts.length)} of {alerts.length} alerts
+                                    </span>
+                                    <div className="flex items-center gap-1.5">
+                                        <button
+                                            onClick={() => setAlertsPage(p => Math.max(1, p - 1))}
+                                            disabled={alertsPage === 1}
+                                            className="rounded-lg border border-zinc-700 bg-zinc-900 p-1 text-zinc-400 disabled:opacity-40"
+                                        >
+                                            <ChevronLeft size={14} />
+                                        </button>
+                                        <span className="text-xs text-zinc-400">
+                                            Page {alertsPage} of {Math.ceil(alerts.length / alertsPerPage)}
+                                        </span>
+                                        <button
+                                            onClick={() => setAlertsPage(p => Math.min(Math.ceil(alerts.length / alertsPerPage), p + 1))}
+                                            disabled={alertsPage === Math.ceil(alerts.length / alertsPerPage)}
+                                            className="rounded-lg border border-zinc-700 bg-zinc-900 p-1 text-zinc-400 disabled:opacity-40"
+                                        >
+                                            <ChevronRight size={14} />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 

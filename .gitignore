@@ -29,3 +29,6 @@ Jenkinsfile
 secrets.txt
 
 Jenkinsfile
+
+/agents
+.opencode

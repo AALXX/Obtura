@@ -126,6 +126,7 @@ func (s *Server) setupRoutes() {
 			alerts.GET("/:alertId", s.validateAlertID(), s.handleGetAlert)
 			alerts.POST("/:alertId/acknowledge/:sessionToken", s.validateAlertID(), s.handleAcknowledgeAlert)
 			alerts.POST("/:alertId/resolve/:sessionToken", s.validateAlertID(), s.handleResolveAlert)
+			alerts.DELETE("/:alertId", s.validateAlertID(), s.handleDeleteAlert)
 		}
 
 		deployments := api.Group("/deployments")
@@ -630,6 +631,46 @@ func (s *Server) handleResolveAlert(c *gin.Context) {
 
 	logger.Info("Alert resolved", zap.String("alert_id", alertID), zap.String("user_id", userID))
 	c.JSON(http.StatusOK, gin.H{"message": "Alert resolved"})
+}
+
+func (s *Server) handleDeleteAlert(c *gin.Context) {
+	alertID := c.Param("alertId")
+	accessToken := c.Query("accessToken")
+
+	if accessToken == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Access token required"})
+		return
+	}
+
+	logger.Info("Deleting alert", zap.String("alert_id", alertID))
+
+	// Validate session token
+	_, err := s.getUserIdFromSessionToken(c.Request.Context(), accessToken)
+	if err != nil {
+		logger.Error("Failed to validate session token", zap.Error(err))
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid session token"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	query := `DELETE FROM deployment_alerts WHERE id = $1`
+	result, err := s.orchestrator.GetDB().ExecContext(ctx, query, alertID)
+	if err != nil {
+		logger.Error("Failed to delete alert", zap.String("alert_id", alertID), logger.Err(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete alert"})
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Alert not found"})
+		return
+	}
+
+	logger.Info("Alert deleted", zap.String("alert_id", alertID))
+	c.JSON(http.StatusOK, gin.H{"message": "Alert deleted"})
 }
 
 // Get deployment health

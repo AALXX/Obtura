@@ -2071,9 +2071,109 @@ const DeleteDeployment = async (req: Request, res: Response) => {
     }
 };
 
+const SearchProjects = async (req: Request, res: Response) => {
+    const errors = CustomRequestValidationResult(req);
+    if (!errors.isEmpty()) {
+        errors.array().forEach((error) => {
+            logging.error('SEARCH-PROJECTS', error.errorMsg);
+        });
+
+        return res.status(401).json({ error: true, errors: errors.array() });
+    }
+
+    try {
+        const { accessToken } = req.params;
+        const { query, limit = '10' } = req.query as { query?: string; limit?: string };
+
+        const userId = await getUserIdFromSessionToken(accessToken!);
+
+        if (!userId) {
+            return res.status(401).json({
+                error: true,
+                errmsg: 'Invalid or expired access token',
+            });
+        }
+
+        if (!query || !query.trim()) {
+            return res.status(200).json({ projects: [] });
+        }
+
+        const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
+        const searchTerm = query.trim();
+
+        const result = await db.query(
+            `
+            SELECT
+                p.id,
+                p.name AS project_name,
+                p.slug,
+                p.created_at,
+                p.github_repository_full_name,
+                t.name AS team_name,
+                COUNT(tm.id) AS member_count,
+                (
+                    CASE
+                        WHEN p.name ILIKE $2 THEN 3
+                        WHEN p.slug ILIKE $2 THEN 2
+                        ELSE 1
+                    END
+                ) AS relevance
+            FROM projects p
+            JOIN teams t ON p.team_id = t.id
+            LEFT JOIN team_members tm ON tm.team_id = t.id
+            WHERE EXISTS (
+                SELECT 1
+                FROM company_users cu
+                WHERE cu.company_id = p.company_id
+                  AND cu.user_id = $1
+            )
+              AND p.deleted_at IS NULL
+              AND (
+                  p.name ILIKE $3
+                  OR p.slug ILIKE $3
+                  OR p.github_repository_full_name ILIKE $3
+              )
+            GROUP BY
+                p.id,
+                p.name,
+                p.slug,
+                p.created_at,
+                p.github_repository_full_name,
+                t.name
+            ORDER BY relevance DESC, p.name ASC
+            LIMIT $4
+            `,
+            [userId, searchTerm, `%${searchTerm}%`, parsedLimit],
+        );
+
+        const projects = result.rows.map((project) => ({
+            id: project.id,
+            projectName: project.project_name,
+            slug: project.slug,
+            createdAt: project.created_at,
+            teamName: project.team_name,
+            memberCount: parseInt(project.member_count, 10),
+            githubRepoFullName: project.github_repository_full_name ?? null,
+        }));
+
+        logging.info('SEARCH-PROJECTS', `User ${userId} searched for "${searchTerm}" — ${projects.length} results`);
+
+        return res.status(200).json({ projects });
+    } catch (error: any) {
+        console.error('Search projects error:', error);
+        logging.error('SEARCH-PROJECTS', error.message);
+
+        return res.status(500).json({
+            error: true,
+            errmsg: 'Failed to search projects',
+        });
+    }
+};
+
 export default {
     RegisterUserWithGoogle,
     GetProjects,
+    SearchProjects,
     UpdateProjectSettings,
     DeleteProject,
     GetProjectDetails,

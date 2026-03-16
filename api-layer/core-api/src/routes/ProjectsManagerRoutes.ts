@@ -51,6 +51,17 @@ router.post(
 );
 
 router.get('/get-projects/:accessToken', param('accessToken').not().isEmpty(), rbac.authenticate, rbac.loadCompanyEmployee, rbac.requirePermission(PermissionResource.PROJECT, PermissionAction.READ), ProjectsServices.GetProjects);
+
+router.get(
+    '/search-projects/:accessToken',
+    param('accessToken').not().isEmpty().withMessage('Access token is required'),
+    query('query').optional().isString().trim().isLength({ max: 100 }).withMessage('Query must be a string of max 100 characters'),
+    query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be between 1 and 50'),
+    rbac.authenticate,
+    rbac.loadCompanyEmployee,
+    rbac.requirePermission(PermissionResource.PROJECT, PermissionAction.READ),
+    ProjectsServices.SearchProjects,
+);
 router.put(
     '/update-settings',
     body('accessToken').not().isEmpty().withMessage('Access token is required'),

@@ -195,6 +195,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
     })
 
     const [resolvingAlerts, setResolvingAlerts] = useState<Set<string>>(new Set())
+    const [deletingAlerts, setDeletingAlerts] = useState<Set<string>>(new Set())
 
     useEffect(() => {
         const productionAlerts = projectData.production?.unresolvedAlerts || []
@@ -358,6 +359,38 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
             alert('Failed to resolve alert. Please try again.')
         } finally {
             setResolvingAlerts(prev => {
+                const newSet = new Set(prev)
+                newSet.delete(alertId)
+                return newSet
+            })
+        }
+    }
+
+    const handleDeleteAlert = async (alertId: string) => {
+        setDeletingAlerts(prev => new Set(prev).add(alertId))
+
+        try {
+            await axios.delete(`${process.env.NEXT_PUBLIC_MONITORING_SERVICE_URL}/api/alerts/${alertId}?accessToken=${accessToken}`)
+
+            setAlerts(prev => prev.filter(alert => alert.id !== alertId))
+
+            setDeployments(prev =>
+                prev.map(deployment => {
+                    if (!deployment.unresolvedAlerts) return deployment
+
+                    const updatedAlerts = deployment.unresolvedAlerts.filter(alert => alert.id !== alertId)
+                    return {
+                        ...deployment,
+                        unresolvedAlerts: updatedAlerts,
+                        unresolvedAlertCount: updatedAlerts.length
+                    }
+                })
+            )
+        } catch (error) {
+            console.error('Error deleting alert:', error)
+            alert('Failed to delete alert. Please try again.')
+        } finally {
+            setDeletingAlerts(prev => {
                 const newSet = new Set(prev)
                 newSet.delete(alertId)
                 return newSet
@@ -1064,7 +1097,7 @@ const ProjectDetails: React.FC<{ projectData: ProjectData; accessToken: string; 
 
                                                             <div className="space-y-2">
                                                                 {alerts.slice(0, 3).map(alert => (
-                                                                    <AlertCard key={alert.id} alert={alert} handleResolve={handleResolveAlert} isResolving={resolvingAlerts.has(alert.id)} />
+                                                                    <AlertCard key={alert.id} alert={alert} handleResolve={handleResolveAlert} isResolving={resolvingAlerts.has(alert.id)} handleDelete={handleDeleteAlert} isDeleting={deletingAlerts.has(alert.id)} />
                                                                 ))}
                                                             </div>
                                                         </div>
