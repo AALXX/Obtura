@@ -297,20 +297,3 @@ max_connections from 20 to 40.
 **Alexandru-Nicolae Șerban** – Founder & CEO  
 📧 alexserbwork@gmail.com  
 🔗 [LinkedIn](https://www.linkedin.com/in/alexandru-serban-nicolae/)
-
-**Rareș Ștefan Miu** – Head of Marketing & COO  
-📧 raresmiu27@gmail.com
-
-**Company**: MRSA SRL  
-📍 Bucharest, Romania
-
----
-
-<p align="center">
-  <strong>We're not just building another dev tool.</strong><br/>
-  We're eliminating the €70,000/year DevOps tax for European SMEs.
-</p>
-
-<p align="center">
-  <em>"Developers should never think about infrastructure."</em>
-</p>
